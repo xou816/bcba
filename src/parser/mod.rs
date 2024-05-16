@@ -3,4 +3,4 @@ mod lang;
 mod token;
 
 pub use token::Tokenizer;
-pub use lang::{LedgerParser, Expression, Person, Amount, Debtor, LedgerEntry};
+pub use lang::{LedgerParser, Expression, Person, Amount, LedgerEntry};
