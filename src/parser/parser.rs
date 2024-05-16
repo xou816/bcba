@@ -1,14 +1,10 @@
 #![allow(dead_code)]
 use std::{
-    fmt::{Debug, Display},
-    iter::Peekable,
+    fmt::Debug,
     vec,
 };
 
-use super::{
-    token::{AnnotatedToken, Token},
-    Expression,
-};
+use super::token::{AnnotatedToken, Token};
 
 #[derive(Debug)]
 pub enum ParseResult<Result> {
@@ -663,28 +659,6 @@ impl<E> Parser for ListParser<E> {
 
     fn reset(&mut self) {
         self.acc = vec![];
-    }
-}
-
-pub type ResultCombiner<Input, Expression> = Box<dyn Fn(Vec<Input>) -> Result<Expression, String>>;
-
-enum SequenceParserStep<I> {
-    Expect(Token),
-    Save(Box<dyn Fn(&Token) -> bool>),
-    SaveUntil(Box<dyn Fn(&Token) -> bool>),
-    Delegate(BoxedParser<I>),
-}
-
-impl<I> Display for SequenceParserStep<I> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SequenceParserStep::Expect(token) => {
-                f.write_fmt(format_args!("Expect {}", token.display_name()))
-            }
-            SequenceParserStep::Save(_) => f.write_str("Save tokens"),
-            SequenceParserStep::SaveUntil(_) => f.write_str("Save until ??"),
-            SequenceParserStep::Delegate(_) => f.write_str("Delegate to other parser"),
-        }
     }
 }
 

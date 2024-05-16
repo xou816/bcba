@@ -13,15 +13,16 @@ impl LedgerParser {
     pub fn parse(
         tokens: &mut dyn Iterator<Item = AnnotatedToken>,
     ) -> Result<Vec<Expression>, String> {
-        let pep = PersonExpressionParser::make()
-            .then(expect_token!(Token::LineEnd))
-            .map(|(p, _)| Expression::PersonDeclaration(p))
-            .boxed();
-        let lep = LedgerEntryParser::make()
-            .map(Expression::LedgerEntry)
-            .boxed();
-        let nil = always_completing(|| Expression::None).boxed();
-        let mut parser = one_of(vec![lep, pep, nil]);
+        let mut parser = one_of(vec![
+            LedgerEntryParser::make()
+                .map(Expression::LedgerEntry)
+                .boxed(),
+            PersonExpressionParser::make()
+                .then(expect_token!(Token::LineEnd))
+                .map(|(p, _)| Expression::PersonDeclaration(p))
+                .boxed(),
+            always_completing(|| Expression::None).boxed(),
+        ]);
         parser.run_to_exhaustion(tokens)
     }
 }
@@ -58,12 +59,12 @@ struct AmountExpressionParser;
 impl AmountExpressionParser {
     fn make() -> impl Parser<Expression = Amount> {
         expect_token!(Token::DollarSymbol)
-            .then(expect_token!(Token::Word(w) => w).try_map(|w| {
-                match w.parse::<f32>() {
+            .then(
+                expect_token!(Token::Word(w) => w).try_map(|w| match w.parse::<f32>() {
                     Ok(price) => Ok(Amount(price)),
                     Err(e) => Err(format!("Failed to parse f32: {}", e)),
-                }
-            }))
+                }),
+            )
             .map(|(_, a)| a)
     }
 }
@@ -111,13 +112,13 @@ impl DebtorParser {
                 Token::Word("everyone".to_string()),
                 Token::Word("but".to_string()),
             ])
-                .then(list_of(Token::Comma, PersonExpressionParser::make()))
-                .map(|(_, v)| Debtor::EveryoneBut(v.into_iter().collect()))
-                .boxed(),
+            .then(list_of(Token::Comma, PersonExpressionParser::make()))
+            .map(|(_, v)| Debtor::EveryoneBut(v.into_iter().collect()))
+            .boxed(),
             list_of(Token::Comma, PersonExpressionParser::make())
                 .map(|v| Debtor::Only(v.into_iter().collect()))
                 .boxed(),
-            expect_token!(Token::Word(ref w) if w == "everyone")
+            expect_token!(Token::Word(w) if w == "everyone")
                 .map(|_| Debtor::EveryoneBut(HashSet::new()))
                 .boxed(),
         ])
