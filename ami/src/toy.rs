@@ -1,4 +1,4 @@
-use std::fmt::{write, Display};
+use std::fmt::Display;
 
 use crate::token::TokenDeserialize;
 
@@ -6,11 +6,15 @@ use crate::token::TokenDeserialize;
 pub enum Token {
     BraceOpen,
     BraceClose,
+    ParenOpen,
+    ParenClose,
     Comma,
     If,
+    Else,
     True,
+    False,
     Word(String),
-    LineEnd
+    LineEnd,
 }
 
 impl Display for Token {
@@ -18,9 +22,13 @@ impl Display for Token {
         match self {
             Token::BraceOpen => write!(f, "opening brace `{{`"),
             Token::BraceClose => write!(f, "closing brace `}}`"),
+            Token::ParenOpen => write!(f, "opening parenthesis `(`"),
+            Token::ParenClose => write!(f, "closing parenthesis `)`"),
             Token::Comma => write!(f, "comma"),
             Token::If => write!(f, "keyword `if`"),
             Token::True => write!(f, "keyword `true`"),
+            Token::Else => write!(f, "keyword `else`"),
+            Token::False => write!(f, "keyword `false`"),
             Token::Word(w) => write!(f, "token `{}`", w),
             Token::LineEnd => write!(f, "line end"),
         }
@@ -34,9 +42,11 @@ impl TokenDeserialize for Token {
         match c {
             '{' => Some(Self::BraceOpen),
             '}' => Some(Self::BraceClose),
+            '(' => Some(Self::ParenOpen),
+            ')' => Some(Self::ParenClose),
             ',' => Some(Self::Comma),
             '\n' => Some(Self::LineEnd),
-            _ => None
+            _ => None,
         }
     }
 
@@ -44,7 +54,9 @@ impl TokenDeserialize for Token {
         match str {
             "if" => Token::If,
             "true" => Token::True,
-            w => Token::Word(w.to_string())
+            "false" => Token::False,
+            "else" => Token::Else,
+            w => Token::Word(w.to_string()),
         }
     }
 }

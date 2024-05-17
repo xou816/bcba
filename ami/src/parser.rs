@@ -145,11 +145,52 @@ pub trait Parser {
         }
     }
 
+    fn then_lazy<P: Parser + 'static>(
+        self,
+        p: impl Fn() -> P + 'static,
+    ) -> ThenParser<Self, LazyParser<P::Token, P::Expression>>
+    where
+        Self: Sized,
+    {
+        self.then(LazyParser {
+            parser: None,
+            get: Box::new(move || Box::new(p())),
+        })
+    }
+
     fn boxed(self) -> Box<dyn Parser<Expression = Self::Expression, Token = Self::Token>>
     where
         Self: Sized + 'static,
     {
         Box::new(self)
+    }
+}
+
+pub struct LazyParser<T, E> {
+    parser: Option<BoxedParser<T, E>>,
+    get: Box<dyn Fn() -> BoxedParser<T, E>>,
+}
+
+impl<T, E> Parser for LazyParser<T, E>
+where
+    T: Display,
+{
+    type Expression = E;
+    type Token = T;
+
+    fn try_consume(
+        &mut self,
+        token: Annotated<Self::Token>,
+        next_token: Option<&Annotated<Self::Token>>,
+    ) -> ParseResult<Self::Token, Self::Expression> {
+        let mut parser = self.parser.take().unwrap_or_else(&self.get);
+        let result = parser.try_consume(token, next_token);
+        self.parser.replace(parser);
+        result
+    }
+
+    fn reset(&mut self) {
+        self.parser = None;
     }
 }
 
@@ -661,7 +702,12 @@ mod tests {
     fn test_seq() {
         let mut p = parsers::sequence([Token::If, Token::BraceOpen, Token::BraceClose]);
 
-        let mut tokens = make_line([Token::If, Token::BraceOpen, Token::BraceClose, Token::LineEnd]);
+        let mut tokens = make_line([
+            Token::If,
+            Token::BraceOpen,
+            Token::BraceClose,
+            Token::LineEnd,
+        ]);
         let res = p.run_to_completion(&mut tokens).unwrap();
         assert_eq!(res, vec![Token::If, Token::BraceOpen, Token::BraceClose]);
 
