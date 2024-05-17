@@ -1,7 +1,6 @@
-use ami::parser::{Parser, SingleParser};
+use ami::prelude::*;
 use ami::parsers::*;
 use ami::token::{Annotated, Tokenizer};
-use ami::{expect_token, unwind};
 use ami::toy::Token;
 
 
@@ -27,19 +26,18 @@ impl Statement {
 
     fn parser() -> impl Parser<Expression = Self, Token = Token> {
         one_of([
-            expect_token!(Token::If)
-                .then(expect_token!(t @ (Token::False|Token::True) => t == Token::True))
-                .then(expect_token!(Token::BraceOpen))
+            just!(Token::If)
+                .then(just!(t @ (Token::False|Token::True) => t == Token::True))
+                .then(just!(Token::BraceOpen))
                 .then_lazy(Statement::parser)
-                .then(expect_token!(Token::BraceClose))
+                .then(just!(Token::BraceClose))
                 .map(|unwind!(_, stm, _, cond, _)| {
                     Self::IfStatement(cond, Box::new(stm))
                 })
                 .boxed(),
-            expect_token!(Token::Word(w) => w)
-                .then(expect_token!(Token::ParenOpen))
-                .then(expect_token!(Token::ParenClose))
-                .map(|unwind!(_, _, proc)| Self::CallProc(proc))
+            just!(Token::Word(w) => w)
+                .then(sequence([Token::ParenOpen, Token::ParenClose]))
+                .map(|unwind!(_, proc)| Self::CallProc(proc))
                 .boxed(),
         ])
     }

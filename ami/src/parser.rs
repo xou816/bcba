@@ -654,7 +654,7 @@ macro_rules! unwind {
 }
 
 #[macro_export]
-macro_rules! expect_token {
+macro_rules! just {
     ($pattern:pat $(if $guard:expr)? $(,)? => $result:expr) => {
         SingleParser::new(|t, _| {
             match t {
@@ -718,7 +718,7 @@ mod tests {
 
     #[test]
     fn test_then() {
-        let mut p = expect_token!(Token::BraceOpen).then(expect_token!(Token::BraceClose));
+        let mut p = just!(Token::BraceOpen).then(just!(Token::BraceClose));
 
         let mut tokens = make_line([Token::BraceOpen, Token::BraceClose]);
         let res = p.run_to_completion(&mut tokens).unwrap();
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn test_list_parser() {
-        let var_parser = expect_token!(Token::Word(w) => w);
+        let var_parser = just!(Token::Word(w) => w);
 
         let mut parser = ListParser::new(Token::Comma, var_parser);
         let mut tokens = make_line([

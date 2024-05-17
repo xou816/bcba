@@ -1,9 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-use ami::{expect_token, unwind};
-use ami::parser::{Parser, SingleParser};
-use ami::parsers::{always_completing, discard_delimited, list_of, one_of, sequence};
+use ami::prelude::*;
+use ami::parsers::*;
 use ami::token::Annotated;
 
 use super::token::Token;
@@ -17,7 +16,7 @@ impl LedgerParser {
         let mut parser = one_of([
             LedgerEntry::parser().map(Expression::LedgerEntry).boxed(),
             Person::parser()
-                .then(expect_token!(Token::LineEnd))
+                .then(just!(Token::LineEnd))
                 .map(|(p, _)| Expression::PersonDeclaration(p))
                 .boxed(),
             always_completing(|| Expression::None).boxed(),
@@ -46,9 +45,9 @@ impl Amount {
     }
 
     pub fn parser() -> impl Parser<Token = Token, Expression = Amount> {
-        expect_token!(Token::DollarSymbol)
+        just!(Token::DollarSymbol)
             .then(
-                expect_token!(Token::Word(w) => w).try_map(|w| match w.parse::<f32>() {
+                just!(Token::Word(w) => w).try_map(|w| match w.parse::<f32>() {
                     Ok(price) => Ok(Amount(price)),
                     Err(e) => Err(format!("Failed to parse f32: {}", e)),
                 }),
@@ -73,8 +72,8 @@ impl Person {
     }
 
     pub fn parser() -> impl Parser<Token = Token, Expression = Person> {
-        expect_token!(Token::NameAnchor)
-            .then(expect_token!(Token::Word(w) => w))
+        just!(Token::NameAnchor)
+            .then(just!(Token::Word(w) => w))
             .map(|(_, name)| Person(name))
     }
 }
@@ -105,7 +104,7 @@ impl Debtor {
             list_of(Token::Comma, Person::parser())
                 .map(|v| Debtor::Only(v.into_iter().collect()))
                 .boxed(),
-            expect_token!(Token::Word(w) if w == "everyone")
+            just!(Token::Word(w) if w == "everyone")
                 .map(|_| Debtor::EveryoneBut(HashSet::new()))
                 .boxed(),
         ])
@@ -117,14 +116,14 @@ pub struct LedgerEntry(pub Person, pub Amount, pub Debtor);
 
 impl LedgerEntry {
     fn parser() -> impl Parser<Token = Token, Expression = LedgerEntry> {
-        expect_token!(Token::LedgerEntryStart)
+        just!(Token::LedgerEntryStart)
             .then(Person::parser())
-            .then(expect_token!(Token::KeywordPaid))
+            .then(just!(Token::KeywordPaid))
             .then(Amount::parser())
-            .then(expect_token!(Token::KeywordFor))
+            .then(just!(Token::KeywordFor))
             .then(Debtor::parser())
             .then(discard_delimited([Token::CommentStart, Token::CommentEnd]))
-            .then(expect_token!(Token::LineEnd))
+            .then(just!(Token::LineEnd))
             .map(|unwind!(_, _, debtor, _, amount, _, person, _)| {
                 LedgerEntry(person, amount, debtor)
             })
