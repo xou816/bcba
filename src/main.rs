@@ -11,7 +11,7 @@ use parser::{Amount, Expression, LedgerEntry, LedgerParser, Person, Tokenizer};
 struct CliArgs {
     file: Option<PathBuf>,
     #[arg(short, long)]
-    pretty: bool
+    pretty: bool,
 }
 
 fn main() -> Result<(), String> {
@@ -56,11 +56,14 @@ fn main() -> Result<(), String> {
         }
     }
 
-    println!("{}", if args.pretty {
-        serde_json::to_string_pretty(&payments).unwrap()
-    } else {
-        serde_json::to_string(&payments).unwrap()
-    });
+    println!(
+        "{}",
+        if args.pretty {
+            serde_json::to_string_pretty(&payments).unwrap()
+        } else {
+            serde_json::to_string(&payments).unwrap()
+        }
+    );
 
     Ok(())
 }

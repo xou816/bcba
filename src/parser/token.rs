@@ -1,7 +1,7 @@
-use std::iter::once;
+use std::{fmt::Display, iter::once};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct AnnotatedToken {
+pub struct Annotated<Token> {
     pub token: Token,
     pub row: usize,
     pub col: usize,
@@ -21,6 +21,23 @@ pub enum Token {
     Word(String),
 }
 
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Token::LedgerEntryStart => write!(f, "start of ledger"),
+            Token::KeywordPaid => write!(f, "keyword `paid`"),
+            Token::NameAnchor => write!(f, "name anchor `@`"),
+            Token::Word(w) => write!(f, "token `{}`", w),
+            Token::DollarSymbol => write!(f, "currency tag `$`"),
+            Token::CommentStart => write!(f, "start of comment `(`"),
+            Token::CommentEnd => write!(f, "end of comment `)`"),
+            Token::KeywordFor => write!(f, "keyword `for`"),
+            Token::LineEnd => write!(f, "end of line"),
+            Token::Comma => write!(f, "comma"),
+        }
+    }
+}
+
 impl PartialEq for Token {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -30,22 +47,7 @@ impl PartialEq for Token {
     }
 }
 
-impl Token {
-    pub fn display_name(&self) -> String {
-        match self {
-            Token::LedgerEntryStart => "start of ledger".to_string(),
-            Token::KeywordPaid => "keyword `paid`".to_string(),
-            Token::NameAnchor => "name anchor `@`".to_string(),
-            Token::Word(w) => format!("token `{}`", w),
-            Token::DollarSymbol => "currency tag `$`".to_string(),
-            Token::CommentStart => "start of comment `(`".to_string(),
-            Token::CommentEnd => "start of comment `)`".to_string(),
-            Token::KeywordFor => "keyword `for`".to_string(),
-            Token::LineEnd => "end of line".to_string(),
-            Token::Comma => "comma".to_string(),
-        }
-    }
-
+impl TokenDeserialize for Token {
     fn try_from_char(c: char) -> Option<Token> {
         match c {
             '@' => Some(Token::NameAnchor),
@@ -66,9 +68,14 @@ impl Token {
             _ => Token::Word(str.to_string()),
         }
     }
+}
 
-    pub fn at(self, row: usize, col: usize) -> AnnotatedToken {
-        AnnotatedToken {
+pub trait TokenDeserialize where Self: Sized {
+    fn try_from_char(c: char) -> Option<Self>;
+    fn for_word(str: &str) -> Self;    
+
+    fn at(self, row: usize, col: usize) -> Annotated<Self> {
+        Annotated {
             token: self,
             row,
             col,
@@ -103,7 +110,7 @@ impl Tokenizer {
         self.col_offset = i + 1;
     }
 
-    fn consume_buffer(&mut self, i: usize) -> Option<AnnotatedToken> {
+    fn consume_buffer<T: TokenDeserialize>(&mut self, i: usize) -> Option<Annotated<T>> {
         if self.buffer_pos == 0 {
             return None;
         }
@@ -112,19 +119,19 @@ impl Tokenizer {
         let content = std::mem::replace(&mut self.buffer, [0; 32]);
         let content = std::str::from_utf8(&content[..self.buffer_pos]).expect("Encoding error");
         self.buffer_pos = 0;
-        Some(Token::for_word(content).at(row, col))
+        Some(T::for_word(content).at(row, col))
     }
 
-    fn accept(&mut self, i: usize, chr: char) -> Vec<AnnotatedToken> {
-        let token = Token::try_from_char(chr);
+    fn accept<T: TokenDeserialize>(&mut self, i: usize, chr: char) -> Vec<Annotated<T>> {
+        let token = T::try_from_char(chr);
         if chr == ' ' || token.is_some() {
             let buffer_token = self.consume_buffer(i);
-            let token = token.map(|t| {
+            let token = token.map(|token| {
                 let (row, col) = self.row_col(i);
-                if let Token::LineEnd = t {
+                if chr == '\n' {
                     self.bump_row(i);
                 }
-                t.at(row, col)
+                token.at(row, col)
             });
             match (buffer_token, token) {
                 (Some(a), Some(b)) => vec![a, b],
@@ -138,7 +145,7 @@ impl Tokenizer {
         }
     }
 
-    pub fn tokenize(program: &str) -> impl Iterator<Item = AnnotatedToken> + '_ {
+    pub fn tokenize<T: TokenDeserialize + 'static>(program: &str) -> impl Iterator<Item = Annotated<T>> + '_ {
         program
             .char_indices()
             .chain(once((program.len(), ' ')))
@@ -180,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_annotated() {
-        let tokens: Vec<AnnotatedToken> = Tokenizer::tokenize("@Foo\nbar").collect();
+        let tokens: Vec<Annotated<Token>> = Tokenizer::tokenize("@Foo\nbar").collect();
         let expected = vec![
             Token::NameAnchor.at(1, 1),
             Token::Word("Foo".to_owned()).at(1, 2),

@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-use self::parsers::{always_completing, expect, one_of};
-use self::parsers::{expect_delimited, list_of};
+use self::parsers::{always_completing, one_of, sequence};
+use self::parsers::{discard_delimited, list_of};
 
 use super::parser::*;
 use super::token::*;
@@ -11,13 +11,11 @@ pub struct LedgerParser;
 
 impl LedgerParser {
     pub fn parse(
-        tokens: &mut dyn Iterator<Item = AnnotatedToken>,
+        tokens: &mut dyn Iterator<Item = Annotated<Token>>,
     ) -> Result<Vec<Expression>, String> {
-        let mut parser = one_of(vec![
-            LedgerEntryParser::make()
-                .map(Expression::LedgerEntry)
-                .boxed(),
-            PersonExpressionParser::make()
+        let mut parser = one_of([
+            LedgerEntry::parser().map(Expression::LedgerEntry).boxed(),
+            Person::parser()
                 .then(expect_token!(Token::LineEnd))
                 .map(|(p, _)| Expression::PersonDeclaration(p))
                 .boxed(),
@@ -45,19 +43,8 @@ impl Amount {
     pub fn is_zero(&self) -> bool {
         self.0.abs() < 1.0 * f32::EPSILON
     }
-}
 
-impl Eq for Amount {}
-impl Ord for Amount {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap()
-    }
-}
-
-struct AmountExpressionParser;
-
-impl AmountExpressionParser {
-    fn make() -> impl Parser<Expression = Amount> {
+    pub fn parser() -> impl Parser<Token = Token, Expression = Amount> {
         expect_token!(Token::DollarSymbol)
             .then(
                 expect_token!(Token::Word(w) => w).try_map(|w| match w.parse::<f32>() {
@@ -69,6 +56,13 @@ impl AmountExpressionParser {
     }
 }
 
+impl Eq for Amount {}
+impl Ord for Amount {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct Person(String);
 
@@ -76,12 +70,8 @@ impl Person {
     pub fn name(&self) -> &str {
         &self.0
     }
-}
 
-struct PersonExpressionParser;
-
-impl PersonExpressionParser {
-    fn make() -> impl Parser<Expression = Person> {
+    pub fn parser() -> impl Parser<Token = Token, Expression = Person> {
         expect_token!(Token::NameAnchor)
             .then(expect_token!(Token::Word(w) => w))
             .map(|(_, name)| Person(name))
@@ -101,21 +91,17 @@ impl Debtor {
             Self::Only(whitelist) => whitelist.clone(),
         }
     }
-}
 
-struct DebtorParser;
-
-impl DebtorParser {
-    fn make() -> impl Parser<Expression = Debtor> {
-        one_of(vec![
-            expect([
+    pub fn parser() -> impl Parser<Token = Token, Expression = Debtor> {
+        one_of([
+            sequence([
                 Token::Word("everyone".to_string()),
                 Token::Word("but".to_string()),
             ])
-            .then(list_of(Token::Comma, PersonExpressionParser::make()))
+            .then(list_of(Token::Comma, Person::parser()))
             .map(|(_, v)| Debtor::EveryoneBut(v.into_iter().collect()))
             .boxed(),
-            list_of(Token::Comma, PersonExpressionParser::make())
+            list_of(Token::Comma, Person::parser())
                 .map(|v| Debtor::Only(v.into_iter().collect()))
                 .boxed(),
             expect_token!(Token::Word(w) if w == "everyone")
@@ -128,17 +114,15 @@ impl DebtorParser {
 #[derive(Debug)]
 pub struct LedgerEntry(pub Person, pub Amount, pub Debtor);
 
-struct LedgerEntryParser;
-
-impl LedgerEntryParser {
-    fn make() -> impl Parser<Expression = LedgerEntry> {
+impl LedgerEntry {
+    fn parser() -> impl Parser<Token = Token, Expression = LedgerEntry> {
         expect_token!(Token::LedgerEntryStart)
-            .then(PersonExpressionParser::make())
+            .then(Person::parser())
             .then(expect_token!(Token::KeywordPaid))
-            .then(AmountExpressionParser::make())
+            .then(Amount::parser())
             .then(expect_token!(Token::KeywordFor))
-            .then(DebtorParser::make())
-            .then(expect_delimited([Token::CommentStart, Token::CommentEnd]))
+            .then(Debtor::parser())
+            .then(discard_delimited([Token::CommentStart, Token::CommentEnd]))
             .then(expect_token!(Token::LineEnd))
             .map(|unwind!(_, _, debtor, _, amount, _, person, _)| {
                 LedgerEntry(person, amount, debtor)
@@ -154,7 +138,7 @@ mod tests {
     #[test]
     fn test_person() {
         let mut tokens = Tokenizer::tokenize("@Foo");
-        let mut parser = PersonExpressionParser::make();
+        let mut parser = Person::parser();
 
         assert!(matches!(
             parser.run_to_completion(&mut tokens),
@@ -164,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_debtor() {
-        let mut parser = DebtorParser::make();
+        let mut parser = Debtor::parser();
         let alex = Person("Alex".to_string());
         let toto = Person("Toto".to_string());
 
@@ -172,7 +156,7 @@ mod tests {
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(
-            dbg!(res),
+            res,
             Ok(Debtor::EveryoneBut(v)) if v == HashSet::from([alex.clone()])
         ));
 
