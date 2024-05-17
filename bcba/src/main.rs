@@ -1,10 +1,11 @@
-mod parser;
 use clap::Parser;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use ami::token::Tokenizer;
 
-use parser::{Amount, Expression, LedgerEntry, LedgerParser, Person, Tokenizer};
+mod parser;
+use parser::{Amount, Expression, LedgerEntry, LedgerParser, Person};
 
 #[derive(Parser)]
 #[command(version)]

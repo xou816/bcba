@@ -599,6 +599,7 @@ where
     }
 }
 
+#[macro_export]
 macro_rules! unwind {
     ($a:pat, $b:pat) => {
         ($b, $a)
@@ -608,6 +609,7 @@ macro_rules! unwind {
     };
 }
 
+#[macro_export]
 macro_rules! expect_token {
     ($pattern:pat $(if $guard:expr)? $(,)? => $result:expr) => {
         SingleParser::new(|t, _| {
@@ -627,16 +629,12 @@ macro_rules! expect_token {
     };
 }
 
-pub(crate) use expect_token;
-pub(crate) use unwind;
-
 #[cfg(test)]
 mod tests {
 
     use tests::parsers::discard_delimited;
 
     use super::*;
-    use crate::parser::token::{Token, TokenDeserialize};
 
     #[derive(Debug, PartialEq, Eq)]
     struct FooResult(String);

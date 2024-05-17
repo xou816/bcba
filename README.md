@@ -29,7 +29,7 @@ Profit.
 
 ## Parser
 
-This project is just an excuse to build a basic parser library, check out `parser.rs`.
+This project is just an excuse to build a basic parser library.
 
 As for the actual ledger parser, it's got some quirks at the moment:
 - files must end with a new line (`\n`);
