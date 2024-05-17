@@ -45,7 +45,7 @@ pub trait Parser {
         next_token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
         match self.try_consume(token, next_token) {
-            ParseResult::Ignored(t) => self.fail_token(t),
+            ParseResult::Ignored(t) => self.fail_token(Some(&t)),
             r => r,
         }
     }
@@ -64,7 +64,7 @@ pub trait Parser {
                 ParseResult::Complete(res) => break Ok(res),
                 ParseResult::Failed(err) => break Err(err),
                 ParseResult::Accepted => continue,
-                ParseResult::Ignored(_) => panic!(),
+                ParseResult::Ignored(_) => unreachable!(),
             }
         }
     }
@@ -101,13 +101,16 @@ pub trait Parser {
 
     fn fail_token(
         &mut self,
-        token: Annotated<Self::Token>,
+        token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
         self.reset();
-        ParseResult::Failed(format!(
-            "Unexpected {} at ln {}, col {}",
-            token.token, token.row, token.col
-        ))
+        ParseResult::Failed(match token {
+            Some(token) => format!(
+                "Unexpected {} at ln {}, col {}",
+                token.token, token.row, token.col
+            ),
+            None => "Unexpected end of input".to_string(),
+        })
     }
 
     fn fail(&mut self, e: String) -> ParseResult<Self::Token, Self::Expression> {
@@ -290,7 +293,7 @@ where
                 if *i == 0 {
                     ParseResult::Ignored(token)
                 } else {
-                    self.fail_token(token)
+                    self.fail_token(next_token)
                 }
             }
         }
@@ -533,7 +536,7 @@ where
                 result
             }
             (false, _, false, _) => ParseResult::Ignored(token),
-            _ => self.fail_token(token),
+            _ => self.fail_token(Some(&token)),
         }
     }
 
@@ -590,7 +593,7 @@ where
             }
             ParseResult::Failed(e) => self.fail(e),
             ParseResult::Ignored(t) if self.acc.is_empty() => ParseResult::Ignored(t),
-            ParseResult::Ignored(t) => self.fail_token(t),
+            ParseResult::Ignored(t) => self.fail_token(Some(&t)),
         }
     }
 
@@ -632,9 +635,8 @@ macro_rules! expect_token {
 #[cfg(test)]
 mod tests {
 
-    use tests::parsers::discard_delimited;
-
     use super::*;
+    use crate::{token::TokenDeserialize, toy::Token};
 
     #[derive(Debug, PartialEq, Eq)]
     struct FooResult(String);
@@ -657,70 +659,72 @@ mod tests {
 
     #[test]
     fn test_seq() {
-        let mut p = parsers::sequence([Token::CommentStart, Token::CommentEnd])
-            .then(expect_token!(Token::LineEnd));
+        let mut p = parsers::sequence([Token::If, Token::BraceOpen, Token::BraceClose]);
 
-        let mut tokens = make_line([Token::CommentStart, Token::CommentEnd, Token::LineEnd]);
+        let mut tokens = make_line([Token::If, Token::BraceOpen, Token::BraceClose, Token::LineEnd]);
         let res = p.run_to_completion(&mut tokens).unwrap();
-        assert_eq!(res, (vec![Token::CommentStart, Token::CommentEnd], ()));
+        assert_eq!(res, vec![Token::If, Token::BraceOpen, Token::BraceClose]);
+
+        let mut tokens = make_line([Token::If, Token::BraceOpen, Token::Comma]);
+        let res = p.run_to_completion(&mut tokens);
+        assert_eq!(res, Err("Unexpected comma at ln 1, col 3".to_string()));
     }
 
     #[test]
     fn test_then() {
-        let mut p = expect_token!(Token::CommentStart).then(expect_token!(Token::CommentEnd));
+        let mut p = expect_token!(Token::BraceOpen).then(expect_token!(Token::BraceClose));
 
-        let mut tokens = make_line([Token::CommentStart, Token::CommentEnd]);
+        let mut tokens = make_line([Token::BraceOpen, Token::BraceClose]);
         let res = p.run_to_completion(&mut tokens).unwrap();
         assert_eq!(res, ((), ()));
 
-        let mut tokens = make_line([Token::CommentStart, Token::LedgerEntryStart]);
+        let mut tokens = make_line([Token::BraceOpen, Token::If]);
         let err = p.run_to_completion(&mut tokens).err().unwrap();
-        assert_eq!(err, "Unexpected start of ledger at ln 1, col 2".to_string())
+        assert_eq!(err, "Unexpected keyword `if` at ln 1, col 2".to_string())
     }
 
     #[test]
     fn test_delimited() {
-        let mut p = discard_delimited([Token::CommentStart, Token::CommentEnd]);
+        let mut p = parsers::discard_delimited([Token::BraceOpen, Token::BraceClose]);
 
-        let mut tokens = make_line([Token::CommentStart, Token::CommentEnd]);
+        let mut tokens = make_line([Token::BraceOpen, Token::BraceClose]);
         let res = p.run_to_completion(&mut tokens).unwrap();
         assert_eq!(res, ());
 
         let mut tokens = make_line([
-            Token::CommentStart,
+            Token::BraceOpen,
             Token::Word("something".to_string()),
-            Token::CommentEnd,
+            Token::BraceClose,
         ]);
         let res = p.run_to_completion(&mut tokens).unwrap();
         assert_eq!(res, ());
 
-        let mut tokens = make_line([Token::Word("something".to_string()), Token::CommentEnd]);
+        let mut tokens = make_line([Token::Word("something".to_string()), Token::BraceClose]);
         let res = p.run_to_exhaustion(&mut tokens);
-        assert_eq!(res, Err("Unexpected token `something` at ln 1, col 1".to_string()));
+        assert_eq!(
+            res,
+            Err("Unexpected token `something` at ln 1, col 1".to_string())
+        );
 
-        let mut tokens = make_line([Token::CommentStart]);
+        let mut tokens = make_line([Token::BraceOpen]);
         let res = p.run_to_exhaustion(&mut tokens);
         assert_eq!(res, Err("Unexpected end of input".to_string()));
     }
 
     #[test]
     fn test_list_parser() {
-        let name_tag_parser = expect_token!(Token::NameAnchor)
-            .then(expect_token!(Token::Word(w) => w))
-            .map(|(_, name)| name);
+        let var_parser = expect_token!(Token::Word(w) => w);
 
-        let mut parser = ListParser::new(Token::Comma, name_tag_parser);
+        let mut parser = ListParser::new(Token::Comma, var_parser);
         let mut tokens = make_line([
-            Token::NameAnchor,
-            Token::Word("Alex".to_string()),
+            Token::Word("foo".to_string()),
             Token::Comma,
-            Token::NameAnchor,
-            Token::Word("Toto".to_string()),
+            Token::Word("bar".to_string()),
         ]);
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), vec!["Alex".to_string(), "Toto".to_string()])
+        assert_eq!(res.unwrap(), vec!["foo".to_string(), "bar".to_string()])
     }
 
     #[test]

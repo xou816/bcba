@@ -134,7 +134,16 @@ impl LedgerEntry {
 #[cfg(test)]
 mod tests {
 
+    use ami::token::Tokenizer;
     use super::*;
+
+    #[test]
+    fn test_token_eq() {
+        assert_eq!(Token::DollarSymbol, Token::DollarSymbol);
+        assert_ne!(Token::CommentStart, Token::CommentEnd);
+        assert_eq!(Token::Word("a".to_owned()), Token::Word("a".to_owned()));
+        assert_ne!(Token::Word("a".to_owned()), Token::Word("b".to_owned()));
+    }
 
     #[test]
     fn test_person() {

@@ -96,44 +96,34 @@ impl Tokenizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    enum Token {
-        
-    }
-
-    #[test]
-    fn test_token_eq() {
-        assert_eq!(Token::DollarSymbol, Token::DollarSymbol);
-        assert_ne!(Token::CommentStart, Token::CommentEnd);
-        assert_eq!(Token::Word("a".to_owned()), Token::Word("a".to_owned()));
-        assert_ne!(Token::Word("a".to_owned()), Token::Word("b".to_owned()));
-    }
+    use crate::toy::Token;
 
     #[test]
     fn test_tokenizer() {
-        let tokens: Vec<Token> = Tokenizer::tokenize("@Foo paid $4 for something")
+        let tokens: Vec<Token> = Tokenizer::tokenize("if true { exit }")
             .map(|t| t.token)
             .collect();
         let expected = vec![
-            Token::NameAnchor,
-            Token::Word("Foo".to_owned()),
-            Token::KeywordPaid,
-            Token::DollarSymbol,
-            Token::Word("4".to_owned()),
-            Token::KeywordFor,
-            Token::Word("something".to_owned()),
+            Token::If,
+            Token::True,
+            Token::BraceOpen,
+            Token::Word("exit".to_string()),
+            Token::BraceClose
         ];
         assert_eq!(expected, tokens);
     }
 
     #[test]
     fn test_annotated() {
-        let tokens: Vec<Annotated<Token>> = Tokenizer::tokenize("@Foo\nbar").collect();
+        let tokens: Vec<Annotated<Token>> = Tokenizer::tokenize("if true {\nexit\n}").collect();
         let expected = vec![
-            Token::NameAnchor.at(1, 1),
-            Token::Word("Foo".to_owned()).at(1, 2),
-            Token::LineEnd.at(1, 5),
-            Token::Word("bar".to_owned()).at(2, 1),
+            Token::If.at(1, 1),
+            Token::True.at(1, 4),
+            Token::BraceOpen.at(1, 9),
+            Token::LineEnd.at(1, 10),
+            Token::Word("exit".to_owned()).at(2, 1),
+            Token::LineEnd.at(2, 5),
+            Token::BraceClose.at(3, 1)
         ];
         assert_eq!(expected, tokens);
     }
