@@ -145,17 +145,15 @@ pub trait Parser {
         }
     }
 
-    fn then_lazy<P: Parser + 'static>(
-        self,
-        p: impl Fn() -> P + 'static,
-    ) -> ThenParser<Self, LazyParser<P::Token, P::Expression>>
+    fn padded(self, padding: Self::Token) -> PaddedParser<Self>
     where
         Self: Sized,
     {
-        self.then(LazyParser {
-            parser: None,
-            get: Box::new(move || Box::new(p())),
-        })
+        PaddedParser {
+            padding,
+            padding_done: false,
+            next_parser: self,
+        }
     }
 
     fn boxed(self) -> Box<dyn Parser<Expression = Self::Expression, Token = Self::Token>>
@@ -244,6 +242,15 @@ pub mod parsers {
 
     use super::*;
 
+    pub fn lazy<P: Parser + 'static>(
+        p: impl Fn() -> P + 'static,
+    ) -> LazyParser<P::Token, P::Expression> {
+        LazyParser {
+            parser: None,
+            get: Box::new(move || Box::new(p())),
+        }
+    }
+
     pub fn one_of<T, E>(parsers: impl IntoIterator<Item = BoxedParser<T, E>>) -> OneOfParser<T, E> {
         OneOfParser(
             parsers
@@ -280,6 +287,18 @@ pub mod parsers {
         ListParser::new(separator, item_parser)
     }
 
+    pub fn delimited<T, E>(
+        delimiter: [T; 2],
+        inner_parser: impl Parser<Token = T, Expression = E> + 'static,
+    ) -> DelimitedParser<T, E> {
+        DelimitedParser {
+            delimiter,
+            inner_result: None,
+            inner_parser: inner_parser.boxed(),
+            started: false,
+        }
+    }
+
     pub fn discard_delimited<T>(delimiter: [T; 2]) -> DelimitedParser<T, ()>
     where
         T: Display + Clone + Eq + 'static,
@@ -291,6 +310,44 @@ pub mod parsers {
             inner_parser: DiscardUntil(end).boxed(),
             started: false,
         }
+    }
+}
+
+pub struct PaddedParser<P>
+where
+    P: Parser,
+{
+    padding: P::Token,
+    padding_done: bool,
+    next_parser: P,
+}
+
+impl<P> Parser for PaddedParser<P>
+where
+    P: Parser,
+    P::Token: Display + Eq,
+{
+    type Expression = P::Expression;
+    type Token = P::Token;
+
+    fn try_consume(
+        &mut self,
+        token: Annotated<Self::Token>,
+        next_token: Option<&Annotated<Self::Token>>,
+    ) -> ParseResult<Self::Token, Self::Expression> {
+        let cur_matches = token.token == self.padding;
+        match (self.padding_done, cur_matches) {
+            (false, true) => ParseResult::Accepted,
+            (false, false) => {
+                self.padding_done = true;
+                self.next_parser.try_consume(token, next_token)
+            }
+            (true, _) => self.next_parser.consume(token, next_token),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.padding_done = false;
     }
 }
 
@@ -541,10 +598,9 @@ pub struct DelimitedParser<T, E> {
 
 impl<T, E> Parser for DelimitedParser<T, E>
 where
-    T: Display + Eq,
-    E: Default,
+    T: Display + Eq + Debug,
 {
-    type Expression = E;
+    type Expression = Option<E>;
     type Token = T;
 
     fn try_consume(
@@ -554,6 +610,11 @@ where
     ) -> ParseResult<Self::Token, Self::Expression> {
         let [ref start, ref end] = self.delimiter;
         let inner_done = self.inner_result.is_some();
+        let inner_next = if next_token.map(|t| &t.token == end).unwrap_or(true) {
+            None
+        } else {
+            next_token
+        };
         match (
             &token.token == start,
             &token.token == end,
@@ -564,15 +625,15 @@ where
                 self.started = true;
                 ParseResult::Accepted
             }
-            (false, false, true, false) => match self.inner_parser.consume(token, next_token) {
+            (false, false, true, false) => match self.inner_parser.consume(token, inner_next) {
                 ParseResult::Complete(r) => {
                     self.inner_result = Some(r);
                     ParseResult::Accepted
                 }
-                r => r,
+                r => r.map_result(Option::Some),
             },
             (_, true, _, _) => {
-                let result = ParseResult::Complete(self.inner_result.take().unwrap_or_default());
+                let result = ParseResult::Complete(self.inner_result.take());
                 self.reset();
                 result
             }
@@ -616,25 +677,28 @@ where
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
-        if token.token == self.separator {
-            return ParseResult::Accepted;
-        }
+        let is_separator = token.token == self.separator;
+        let next_is_end = next_token.is_none();
+        let next_is_not_separator =
+            matches!(next_token, Some(Annotated {token,..}) if token != &self.separator);
 
-        match self.item_parser.try_consume(token, next_token) {
-            ParseResult::Accepted => ParseResult::Accepted,
-            ParseResult::Complete(item) => {
-                self.acc.push(item);
-                if next_token.is_none()
-                    || matches!(next_token, Some(Annotated {token,..}) if token != &self.separator)
-                {
-                    ParseResult::Complete(self.acc.drain(..).collect())
-                } else {
-                    ParseResult::Accepted
+        match (is_separator, next_is_end) {
+            (true, true) => ParseResult::Complete(self.acc.drain(..).collect()),
+            (true, false) => ParseResult::Accepted,
+            _ => match self.item_parser.try_consume(token, next_token) {
+                ParseResult::Accepted => ParseResult::Accepted,
+                ParseResult::Complete(item) => {
+                    self.acc.push(item);
+                    if next_is_end || next_is_not_separator {
+                        ParseResult::Complete(self.acc.drain(..).collect())
+                    } else {
+                        ParseResult::Accepted
+                    }
                 }
-            }
-            ParseResult::Failed(e) => self.fail(e),
-            ParseResult::Ignored(t) if self.acc.is_empty() => ParseResult::Ignored(t),
-            ParseResult::Ignored(t) => self.fail_token(Some(&t)),
+                ParseResult::Failed(e) => self.fail(e),
+                ParseResult::Ignored(t) if self.acc.is_empty() => ParseResult::Ignored(t),
+                ParseResult::Ignored(t) => self.fail_token(Some(&t)),
+            },
         }
     }
 
@@ -656,17 +720,17 @@ macro_rules! unwind {
 #[macro_export]
 macro_rules! just {
     ($pattern:pat $(if $guard:expr)? $(,)? => $result:expr) => {
-        SingleParser::new(|t, _| {
+        $crate::parser::SingleParser::new(|t, _| {
             match t {
-                Annotated { token: $pattern, .. } $(if $guard)? => Ok($result),
+                $crate::token::Annotated { token: $pattern, .. } $(if $guard)? => Ok($result),
                 t => Err(t)
             }
         })
     };
     ($pattern:pat $(if $guard:expr)? $(,)?) => {
-        SingleParser::new(|t, _| {
+        $crate::parser::SingleParser::new(|t, _| {
             match t {
-                Annotated { token: $pattern, .. } $(if $guard)? => Ok(()),
+                $crate::token::Annotated { token: $pattern, .. } $(if $guard)? => Ok(()),
                 t => Err(t)
             }
         })
@@ -735,7 +799,7 @@ mod tests {
 
         let mut tokens = make_line([Token::BraceOpen, Token::BraceClose]);
         let res = p.run_to_completion(&mut tokens).unwrap();
-        assert_eq!(res, ());
+        assert_eq!(res, None);
 
         let mut tokens = make_line([
             Token::BraceOpen,
@@ -743,7 +807,7 @@ mod tests {
             Token::BraceClose,
         ]);
         let res = p.run_to_completion(&mut tokens).unwrap();
-        assert_eq!(res, ());
+        assert_eq!(res, None);
 
         let mut tokens = make_line([Token::Word("something".to_string()), Token::BraceClose]);
         let res = p.run_to_exhaustion(&mut tokens);
