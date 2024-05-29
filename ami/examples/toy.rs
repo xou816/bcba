@@ -35,14 +35,10 @@ impl Statement {
         one_of([
             just!(Token::If)
                 .then(just!(t @ (Token::False|Token::True) => t == Token::True))
-                .then(delimited(
-                    [Token::BraceOpen, Token::BraceClose],
-                    list_of(Token::LineEnd, lazy(Statement::parser)),
-                ))
-                .map(|unwind!(stm, cond, _)| match stm {
-                    Some(stm) => Self::IfStatement(cond, stm),
-                    None => Self::Empty,
-                })
+                .then(just!(Token::BraceOpen))
+                .then(repeat_until(Token::BraceClose, lazy(Statement::parser)))
+                .then(just!(Token::BraceClose))
+                .map(|unwind!(_, stm, _, cond, _)| Self::IfStatement(cond, stm))
                 .boxed(),
             just!(Token::Word(w) => w)
                 .then(sequence([Token::ParenOpen, Token::ParenClose]))
@@ -58,6 +54,9 @@ fn main() {
         r#"
     if true {
         hello()
+        if false {
+            bye()
+        }
     }
 
     hello()

@@ -145,17 +145,6 @@ pub trait Parser {
         }
     }
 
-    fn padded(self, padding: Self::Token) -> PaddedParser<Self>
-    where
-        Self: Sized,
-    {
-        PaddedParser {
-            padding,
-            padding_done: false,
-            next_parser: self,
-        }
-    }
-
     fn boxed(self) -> Box<dyn Parser<Expression = Self::Expression, Token = Self::Token>>
     where
         Self: Sized + 'static,
@@ -164,17 +153,21 @@ pub trait Parser {
     }
 }
 
-pub struct LazyParser<T, E> {
-    parser: Option<BoxedParser<T, E>>,
-    get: Box<dyn Fn() -> BoxedParser<T, E>>,
+pub struct LazyParser<P>
+where
+    P: Parser,
+{
+    parser: Option<P>,
+    get: Box<dyn Fn() -> P>,
 }
 
-impl<T, E> Parser for LazyParser<T, E>
+impl<P> Parser for LazyParser<P>
 where
-    T: Display,
+    P: Parser,
+    P::Token: Display,
 {
-    type Expression = E;
-    type Token = T;
+    type Expression = P::Expression;
+    type Token = P::Token;
 
     fn try_consume(
         &mut self,
@@ -242,12 +235,10 @@ pub mod parsers {
 
     use super::*;
 
-    pub fn lazy<P: Parser + 'static>(
-        p: impl Fn() -> P + 'static,
-    ) -> LazyParser<P::Token, P::Expression> {
+    pub fn lazy<P: Parser + 'static>(p: impl Fn() -> P + 'static) -> LazyParser<P> {
         LazyParser {
             parser: None,
-            get: Box::new(move || Box::new(p())),
+            get: Box::new(p),
         }
     }
 
@@ -280,26 +271,27 @@ pub mod parsers {
         }
     }
 
-    pub fn list_of<T, E>(
-        separator: T,
-        item_parser: impl Parser<Token = T, Expression = E> + 'static,
-    ) -> ListParser<T, E> {
+    pub fn list_of<P>(
+        separator: P::Token,
+        item_parser: P,
+    ) -> ListParser<P> where P: Parser {
         ListParser::new(separator, item_parser)
     }
 
-    pub fn delimited<T, E>(
-        delimiter: [T; 2],
-        inner_parser: impl Parser<Token = T, Expression = E> + 'static,
-    ) -> DelimitedParser<T, E> {
-        DelimitedParser {
-            delimiter,
-            inner_result: None,
-            inner_parser: inner_parser.boxed(),
-            started: false,
+    pub fn repeat_until<P>(end: P::Token, parser: P) -> RepeatUntil<P>
+    where
+        P: Parser,
+    {
+        RepeatUntil {
+            parser,
+            busy: false,
+            end,
+            acc: vec![],
         }
     }
 
-    pub fn discard_delimited<T>(delimiter: [T; 2]) -> DelimitedParser<T, ()>
+    #[deprecated]
+    pub fn discard_delimited<T>(delimiter: [T; 2]) -> DelimitedParser<DiscardUntil<T>>
     where
         T: Display + Clone + Eq + 'static,
     {
@@ -307,47 +299,9 @@ pub mod parsers {
         DelimitedParser {
             delimiter,
             inner_result: None,
-            inner_parser: DiscardUntil(end).boxed(),
+            inner_parser: DiscardUntil(end),
             started: false,
         }
-    }
-}
-
-pub struct PaddedParser<P>
-where
-    P: Parser,
-{
-    padding: P::Token,
-    padding_done: bool,
-    next_parser: P,
-}
-
-impl<P> Parser for PaddedParser<P>
-where
-    P: Parser,
-    P::Token: Display + Eq,
-{
-    type Expression = P::Expression;
-    type Token = P::Token;
-
-    fn try_consume(
-        &mut self,
-        token: Annotated<Self::Token>,
-        next_token: Option<&Annotated<Self::Token>>,
-    ) -> ParseResult<Self::Token, Self::Expression> {
-        let cur_matches = token.token == self.padding;
-        match (self.padding_done, cur_matches) {
-            (false, true) => ParseResult::Accepted,
-            (false, false) => {
-                self.padding_done = true;
-                self.next_parser.try_consume(token, next_token)
-            }
-            (true, _) => self.next_parser.consume(token, next_token),
-        }
-    }
-
-    fn reset(&mut self) {
-        self.padding_done = false;
     }
 }
 
@@ -589,19 +543,72 @@ where
     fn reset(&mut self) {}
 }
 
-pub struct DelimitedParser<T, E> {
-    delimiter: [T; 2],
-    inner_result: Option<E>,
-    inner_parser: BoxedParser<T, E>,
+pub struct RepeatUntil<P: Parser> {
+    parser: P,
+    busy: bool,
+    end: P::Token,
+    acc: Vec<P::Expression>,
+}
+
+impl<P> Parser for RepeatUntil<P>
+where
+    P: Parser,
+    P::Token: Display + Eq,
+{
+    type Expression = Vec<P::Expression>;
+    type Token = P::Token;
+
+    fn try_consume(
+        &mut self,
+        token: Annotated<Self::Token>,
+        next_token: Option<&Annotated<Self::Token>>,
+    ) -> ParseResult<Self::Token, Self::Expression> {
+        let next_is_end = next_token.map(|t| t.token == self.end).unwrap_or(false);
+        match self.parser.try_consume(token, next_token) {
+            ParseResult::Accepted => {
+                self.busy = true;
+                ParseResult::Accepted
+            }
+            ParseResult::Complete(e) if next_is_end => {
+                self.acc.push(e);
+                let r = ParseResult::Complete(self.acc.drain(..).collect());
+                self.reset();
+                r
+            }
+            ParseResult::Complete(e) => {
+                self.busy = false;
+                self.acc.push(e);
+                ParseResult::Accepted
+            }
+            ParseResult::Failed(e) => ParseResult::Failed(e),
+            ParseResult::Ignored(t) if !self.busy && self.acc.is_empty() => ParseResult::Ignored(t),
+            ParseResult::Ignored(t) => self.fail_token(Some(&t)),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.busy = false;
+        self.acc = vec![];
+    }
+}
+
+pub struct DelimitedParser<P>
+where
+    P: Parser,
+{
+    delimiter: [P::Token; 2],
+    inner_result: Option<P::Expression>,
+    inner_parser: P,
     started: bool,
 }
 
-impl<T, E> Parser for DelimitedParser<T, E>
+impl<P> Parser for DelimitedParser<P>
 where
-    T: Display + Eq + Debug,
+    P: Parser,
+    P::Token: Display + Eq + Debug,
 {
-    type Expression = Option<E>;
-    type Token = T;
+    type Expression = Option<P::Expression>;
+    type Token = P::Token;
 
     fn try_consume(
         &mut self,
@@ -649,28 +656,35 @@ where
     }
 }
 
-pub struct ListParser<T, E> {
-    separator: T,
-    item_parser: BoxedParser<T, E>,
-    acc: Vec<E>,
+pub struct ListParser<P>
+where
+    P: Parser,
+{
+    separator: P::Token,
+    item_parser: P,
+    acc: Vec<P::Expression>,
 }
 
-impl<T, E> ListParser<T, E> {
-    fn new(separator: T, item_parser: impl Parser<Token = T, Expression = E> + 'static) -> Self {
+impl<P> ListParser<P>
+where
+    P: Parser,
+{
+    fn new(separator: P::Token, item_parser: P) -> Self {
         Self {
             separator,
-            item_parser: item_parser.boxed(),
+            item_parser,
             acc: vec![],
         }
     }
 }
 
-impl<T: Display, E> Parser for ListParser<T, E>
+impl<P> Parser for ListParser<P>
 where
-    T: Eq,
+    P: Parser,
+    P::Token: Display + Eq,
 {
-    type Expression = Vec<E>;
-    type Token = T;
+    type Expression = Vec<P::Expression>;
+    type Token = P::Token;
 
     fn try_consume(
         &mut self,
