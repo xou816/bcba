@@ -133,7 +133,7 @@ impl LedgerEntry {
 #[cfg(test)]
 mod tests {
 
-    use ami::token::Tokenizer;
+    use ami::token::_Tokenizer;
     use super::*;
 
     #[test]
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_person() {
-        let mut tokens = Tokenizer::tokenize("@Foo");
+        let mut tokens = _Tokenizer::tokenize("@Foo");
         let mut parser = Person::parser();
 
         assert!(matches!(
@@ -161,7 +161,7 @@ mod tests {
         let alex = Person("Alex".to_string());
         let toto = Person("Toto".to_string());
 
-        let mut tokens = Tokenizer::tokenize("everyone but @Alex");
+        let mut tokens = _Tokenizer::tokenize("everyone but @Alex");
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(
@@ -169,7 +169,7 @@ mod tests {
             Ok(Debtor::EveryoneBut(v)) if v == HashSet::from([alex.clone()])
         ));
 
-        let mut tokens = Tokenizer::tokenize("everyone but @Alex, @Toto");
+        let mut tokens = _Tokenizer::tokenize("everyone but @Alex, @Toto");
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(
@@ -177,7 +177,7 @@ mod tests {
             Ok(Debtor::EveryoneBut(v)) if v == HashSet::from([alex.clone(), toto.clone()])
         ));
 
-        let mut tokens = Tokenizer::tokenize("@Alex, @Toto");
+        let mut tokens = _Tokenizer::tokenize("@Alex, @Toto");
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(
@@ -185,7 +185,7 @@ mod tests {
             Ok(Debtor::Only(v)) if v == HashSet::from([alex, toto])
         ));
 
-        let mut tokens = Tokenizer::tokenize("everyone");
+        let mut tokens = _Tokenizer::tokenize("everyone");
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(

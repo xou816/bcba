@@ -1,6 +1,7 @@
 use ami::parsers::*;
 use ami::prelude::*;
 use ami::token::Tokenizer;
+use ami::token::_Tokenizer;
 use ami::toy::Token;
 
 #[derive(Debug)]
@@ -40,7 +41,7 @@ impl Statement {
                 .then(just!(Token::BraceClose))
                 .map(|unwind!(_, stm, _, cond, _)| Self::IfStatement(cond, stm))
                 .boxed(),
-            just!(Token::Word(w) => w)
+            just!(Token::Identifier(w) => w)
                 .then(sequence([Token::ParenOpen, Token::ParenClose]))
                 .map(|unwind!(_, proc)| Self::CallProc(proc))
                 .boxed(),
@@ -50,7 +51,7 @@ impl Statement {
 }
 
 fn main() {
-    let mut tokens = Tokenizer::tokenize::<Token>(
+    let mut tokens = Tokenizer::<Token>::new().tokenize(
         r#"
     if true {
         hello()

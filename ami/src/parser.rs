@@ -817,13 +817,13 @@ mod tests {
 
         let mut tokens = make_line([
             Token::BraceOpen,
-            Token::Word("something".to_string()),
+            Token::Identifier("something".to_string()),
             Token::BraceClose,
         ]);
         let res = p.run_to_completion(&mut tokens).unwrap();
         assert_eq!(res, None);
 
-        let mut tokens = make_line([Token::Word("something".to_string()), Token::BraceClose]);
+        let mut tokens = make_line([Token::Identifier("something".to_string()), Token::BraceClose]);
         let res = p.run_to_exhaustion(&mut tokens);
         assert_eq!(
             res,
@@ -837,13 +837,13 @@ mod tests {
 
     #[test]
     fn test_list_parser() {
-        let var_parser = just!(Token::Word(w) => w);
+        let var_parser = just!(Token::Identifier(w) => w);
 
         let mut parser = ListParser::new(Token::Comma, var_parser);
         let mut tokens = make_line([
-            Token::Word("foo".to_string()),
+            Token::Identifier("foo".to_string()),
             Token::Comma,
-            Token::Word("bar".to_string()),
+            Token::Identifier("bar".to_string()),
         ]);
         let res = parser.run_to_completion(&mut tokens);
 

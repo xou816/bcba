@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::token::TokenDeserialize;
+use crate::token::{TokenDeserialize, TokenProducer};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -13,8 +13,10 @@ pub enum Token {
     Else,
     True,
     False,
-    Word(String),
+    Identifier(String),
     LineEnd,
+    LitString(String),
+    LitNum(f32)
 }
 
 impl Display for Token {
@@ -29,13 +31,38 @@ impl Display for Token {
             Token::True => write!(f, "keyword `true`"),
             Token::Else => write!(f, "keyword `else`"),
             Token::False => write!(f, "keyword `false`"),
-            Token::Word(w) => write!(f, "token `{}`", w),
+            Token::Identifier(w) => write!(f, "token `{}`", w),
             Token::LineEnd => write!(f, "line end"),
+            Token::LitString(_) => write!(f, "string litteral"),
+            Token::LitNum(_) => write!(f, "number litteral"),
         }
     }
 }
 
 impl Eq for Token {}
+
+impl TokenProducer for Token {
+    type Token = Self;
+
+    fn tokenize(word: &str, buffer: &mut crate::token::Buffer) -> Option<Self> {
+        match word {
+            "\"" if buffer.buffering() => buffer.take(|s| Token::LitString(s.join(" "))),
+            _ if buffer.buffering() => buffer.push(word).expect(),
+            "\"" => buffer.expect(),
+            "{" => Some(Self::BraceOpen),
+            "}" => Some(Self::BraceClose),
+            "(" => Some(Self::ParenOpen),
+            ")" => Some(Self::ParenClose),
+            "," => Some(Self::Comma),
+            "\n" => Some(Self::LineEnd),
+            "if" => Some(Token::If),
+            "true" => Some(Token::True),
+            "false" => Some(Token::False),
+            "else" => Some(Token::Else),
+            _ => Some(Token::Identifier(word.to_string())),
+        }
+    }
+}
 
 impl TokenDeserialize for Token {
     fn try_from_char(c: char) -> Option<Self> {
@@ -56,7 +83,7 @@ impl TokenDeserialize for Token {
             "true" => Token::True,
             "false" => Token::False,
             "else" => Token::Else,
-            w => Token::Word(w.to_string()),
+            w => Token::Identifier(w.to_string()),
         }
     }
 }

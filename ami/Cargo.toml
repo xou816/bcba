@@ -7,3 +7,4 @@ edition = "2021"
 name = "toy"
 
 [dependencies]
+unicode-segmentation = "1.11.0"

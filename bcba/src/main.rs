@@ -2,7 +2,7 @@ use clap::Parser;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use ami::token::Tokenizer;
+use ami::token::_Tokenizer;
 
 mod parser;
 use parser::{Amount, Expression, LedgerEntry, LedgerParser, Person};
@@ -71,7 +71,7 @@ fn main() -> Result<(), String> {
 
 fn parse(file: impl AsRef<Path>) -> Result<Vec<Expression>, String> {
     let program = std::fs::read_to_string(file).expect("File not found");
-    let mut tokens = Tokenizer::tokenize(&program);
+    let mut tokens = _Tokenizer::tokenize(&program);
     LedgerParser::parse(&mut tokens)
 }
 

@@ -1,4 +1,6 @@
-use std::iter::once;
+use std::{iter::once, marker::PhantomData};
+
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Annotated<Token> {
@@ -7,9 +9,12 @@ pub struct Annotated<Token> {
     pub col: usize,
 }
 
-pub trait TokenDeserialize where Self: Sized {
+pub trait TokenDeserialize
+where
+    Self: Sized,
+{
     fn try_from_char(c: char) -> Option<Self>;
-    fn for_word(str: &str) -> Self;    
+    fn for_word(str: &str) -> Self;
 
     fn at(self, row: usize, col: usize) -> Annotated<Self> {
         Annotated {
@@ -20,14 +25,15 @@ pub trait TokenDeserialize where Self: Sized {
     }
 }
 
-pub struct Tokenizer {
+#[deprecated]
+pub struct _Tokenizer {
     buffer: [u8; 32],
     buffer_pos: usize,
     row: usize,
     col_offset: usize,
 }
 
-impl Tokenizer {
+impl _Tokenizer {
     fn new() -> Self {
         Self {
             buffer: [0u8; 32],
@@ -82,7 +88,9 @@ impl Tokenizer {
         }
     }
 
-    pub fn tokenize<T: TokenDeserialize + 'static>(program: &str) -> impl Iterator<Item = Annotated<T>> + '_ {
+    pub fn tokenize<T: TokenDeserialize + 'static>(
+        program: &str,
+    ) -> impl Iterator<Item = Annotated<T>> + '_ {
         program
             .char_indices()
             .chain(once((program.len(), ' ')))
@@ -93,37 +101,150 @@ impl Tokenizer {
     }
 }
 
+#[derive(Default)]
+pub struct Buffer {
+    buffer: Vec<String>,
+    pos: (usize, usize),
+    buffering: bool,
+}
+
+impl Buffer {
+    pub fn take<T>(&mut self, f: impl FnOnce(Vec<String>) -> T) -> Option<T> {
+        self.buffering = false;
+        Some(f(self.buffer.drain(..).collect()))
+    }
+
+    pub fn push(&mut self, s: &str) -> &mut Self {
+        self.buffering = true;
+        self.buffer.push(s.to_string());
+        self
+    }
+
+    pub fn expect<T>(&mut self) -> Option<T> {
+        self.buffering = true;
+        None
+    }
+
+    pub fn buffering(&self) -> bool {
+        self.buffering
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+}
+
+pub enum Tokenize<T> {
+    Buffer,
+    Yield(T),
+}
+
+pub trait TokenProducer {
+    type Token;
+    fn tokenize(word: &str, buffer: &mut Buffer) -> Option<Self::Token>;
+}
+
+pub struct Tokenizer<P> {
+    producer: PhantomData<P>,
+    buffer: Buffer,
+    col: usize,
+    row: usize,
+}
+
+impl<P> Tokenizer<P>
+where
+    P: TokenProducer + 'static,
+{
+    pub fn new() -> Self {
+        Self {
+            producer: PhantomData,
+            buffer: Default::default(),
+            col: 1,
+            row: 1,
+        }
+    }
+
+    fn compute_pos(&mut self, word: &str) {
+        if !self.buffer.buffering() {
+            self.buffer.pos = (self.row, self.col);
+        }
+        match word {
+            "\n" => {
+                self.col = 1;
+            self.row += 1;
+            },
+            _ => self.col += word.graphemes(true).count(),
+        }
+    }
+
+    pub fn tokenize(mut self, program: &str) -> impl Iterator<Item = Annotated<P::Token>> + '_ {
+        program
+            .split_word_bounds()
+            .into_iter()
+            .filter_map(move |word| {
+                self.compute_pos(word);
+
+                if word != "\n" && word.chars().all(char::is_whitespace) {
+                    return None;
+                }
+                let token = P::tokenize(word, &mut self.buffer)?;
+                let (row, col) = self.buffer.pos;
+                Some(Annotated { token, row, col })
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::toy::Token;
 
     #[test]
+    fn test_v2() {
+        let tokens: Vec<Annotated<Token>> = Tokenizer::<Token>::new()
+            .tokenize("if true {\nprint(\"hellô world\")\n}")
+            .collect();
+        let expected = vec![
+            Token::If.at(1, 1),
+            Token::True.at(1, 4),
+            Token::BraceOpen.at(1, 9),
+            Token::LineEnd.at(1, 10),
+            Token::Identifier("print".to_owned()).at(2, 1),
+            Token::ParenOpen.at(2, 6),
+            Token::LitString("hellô world".to_owned()).at(2, 7),
+            Token::ParenClose.at(2, 20),
+            Token::LineEnd.at(2, 21),
+            Token::BraceClose.at(3, 1),
+        ];
+        assert_eq!(expected, tokens);
+    }
+
+    #[test]
     fn test_tokenizer() {
-        let tokens: Vec<Token> = Tokenizer::tokenize("if true { exit }")
+        let tokens: Vec<Token> = _Tokenizer::tokenize("if true { exit }")
             .map(|t| t.token)
             .collect();
         let expected = vec![
             Token::If,
             Token::True,
             Token::BraceOpen,
-            Token::Word("exit".to_string()),
-            Token::BraceClose
+            Token::Identifier("exit".to_string()),
+            Token::BraceClose,
         ];
         assert_eq!(expected, tokens);
     }
 
     #[test]
     fn test_annotated() {
-        let tokens: Vec<Annotated<Token>> = Tokenizer::tokenize("if true {\nexit\n}").collect();
+        let tokens: Vec<Annotated<Token>> = _Tokenizer::tokenize("if true {\nexit\n}").collect();
         let expected = vec![
             Token::If.at(1, 1),
             Token::True.at(1, 4),
             Token::BraceOpen.at(1, 9),
             Token::LineEnd.at(1, 10),
-            Token::Word("exit".to_owned()).at(2, 1),
+            Token::Identifier("exit".to_owned()).at(2, 1),
             Token::LineEnd.at(2, 5),
-            Token::BraceClose.at(3, 1)
+            Token::BraceClose.at(3, 1),
         ];
         assert_eq!(expected, tokens);
     }
