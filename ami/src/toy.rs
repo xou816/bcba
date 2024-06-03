@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::token::{TokenDeserialize, TokenProducer};
+use crate::token::{Annotated, TokenProducer};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -17,6 +17,16 @@ pub enum Token {
     LineEnd,
     LitString(String),
     LitNum(f32)
+}
+
+impl Token {
+    pub fn at(self, row: usize, col: usize) -> Annotated<Self> {
+        Annotated {
+            token: self,
+            row,
+            col,
+        }
+    }
 }
 
 impl Display for Token {
@@ -58,30 +68,6 @@ impl TokenProducer for Token {
             "false" => Some(Token::False),
             "else" => Some(Token::Else),
             _ => Some(Token::Identifier(word.to_string())),
-        }
-    }
-}
-
-impl TokenDeserialize for Token {
-    fn try_from_char(c: char) -> Option<Self> {
-        match c {
-            '{' => Some(Self::BraceOpen),
-            '}' => Some(Self::BraceClose),
-            '(' => Some(Self::ParenOpen),
-            ')' => Some(Self::ParenClose),
-            ',' => Some(Self::Comma),
-            '\n' => Some(Self::LineEnd),
-            _ => None,
-        }
-    }
-
-    fn for_word(str: &str) -> Self {
-        match str {
-            "if" => Token::If,
-            "true" => Token::True,
-            "false" => Token::False,
-            "else" => Token::Else,
-            w => Token::Identifier(w.to_string()),
         }
     }
 }

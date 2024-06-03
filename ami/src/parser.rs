@@ -755,7 +755,7 @@ macro_rules! just {
 mod tests {
 
     use super::*;
-    use crate::{token::TokenDeserialize, toy::Token};
+    use crate::toy::Token;
 
     #[derive(Debug, PartialEq, Eq)]
     struct FooResult(String);

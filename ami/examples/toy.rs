@@ -1,7 +1,6 @@
 use ami::parsers::*;
 use ami::prelude::*;
 use ami::token::Tokenizer;
-use ami::token::_Tokenizer;
 use ami::toy::Token;
 
 #[derive(Debug)]
