@@ -19,7 +19,7 @@ impl LedgerParser {
                 .then(just!(Token::LineEnd))
                 .map(|(p, _)| Expression::PersonDeclaration(p))
                 .boxed(),
-            always_completing(|| Expression::None).boxed(),
+            just!(Token::LineEnd).map(|_| Expression::None).boxed()
         ]);
         parser.run_to_exhaustion(tokens)
     }
@@ -95,8 +95,8 @@ impl Debtor {
     pub fn parser() -> impl Parser<Token = Token, Expression = Debtor> {
         one_of([
             sequence([
-                Token::Word("everyone".to_string()),
-                Token::Word("but".to_string()),
+                Token::KeywordEveryone,
+                Token::KeywordBut
             ])
             .then(list_of(Token::Comma, Person::parser()))
             .map(|(_, v)| Debtor::EveryoneBut(v.into_iter().collect()))
@@ -104,7 +104,7 @@ impl Debtor {
             list_of(Token::Comma, Person::parser())
                 .map(|v| Debtor::Only(v.into_iter().collect()))
                 .boxed(),
-            just!(Token::Word(w) if w == "everyone")
+            just!(Token::KeywordEveryone)
                 .map(|_| Debtor::EveryoneBut(HashSet::new()))
                 .boxed(),
         ])
@@ -122,7 +122,7 @@ impl LedgerEntry {
             .then(Amount::parser())
             .then(just!(Token::KeywordFor))
             .then(Debtor::parser())
-            .then(discard_delimited([Token::CommentStart, Token::CommentEnd]))
+            .then(just!(Token::Comment(_)))
             .then(just!(Token::LineEnd))
             .map(|unwind!(_, _, debtor, _, amount, _, person, _)| {
                 LedgerEntry(person, amount, debtor)
@@ -133,20 +133,31 @@ impl LedgerEntry {
 #[cfg(test)]
 mod tests {
 
-    use ami::token::_Tokenizer;
+    use ami::token::Tokenizer;
     use super::*;
 
     #[test]
     fn test_token_eq() {
         assert_eq!(Token::DollarSymbol, Token::DollarSymbol);
-        assert_ne!(Token::CommentStart, Token::CommentEnd);
         assert_eq!(Token::Word("a".to_owned()), Token::Word("a".to_owned()));
         assert_ne!(Token::Word("a".to_owned()), Token::Word("b".to_owned()));
     }
 
     #[test]
+    fn test_comment() {
+        let mut tokens = Tokenizer::<Token>::new().tokenize("(salut)");
+
+        assert!(matches!(
+            tokens.next().unwrap().token,
+            Token::Comment(_)
+        ));
+
+        assert!(tokens.next().is_none());
+    }
+
+    #[test]
     fn test_person() {
-        let mut tokens = _Tokenizer::tokenize("@Foo");
+        let mut tokens = Tokenizer::<Token>::new().tokenize("@Foo");
         let mut parser = Person::parser();
 
         assert!(matches!(
@@ -156,12 +167,23 @@ mod tests {
     }
 
     #[test]
+    fn test_ledger_entry() {
+        let mut parser = LedgerEntry::parser();
+        let mut tokens = Tokenizer::<Token>::new().tokenize("- @Foo paid $3.99 for everyone but @Bar (no reason)\n");
+        let res = parser.run_to_completion(&mut tokens);       
+        assert!(matches!(
+            res,
+            Ok(LedgerEntry(_, _, Debtor::EveryoneBut(_)))
+        ));
+    }
+
+    #[test]
     fn test_debtor() {
         let mut parser = Debtor::parser();
         let alex = Person("Alex".to_string());
         let toto = Person("Toto".to_string());
 
-        let mut tokens = _Tokenizer::tokenize("everyone but @Alex");
+        let mut tokens = Tokenizer::<Token>::new().tokenize("everyone but @Alex");
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(
@@ -169,7 +191,7 @@ mod tests {
             Ok(Debtor::EveryoneBut(v)) if v == HashSet::from([alex.clone()])
         ));
 
-        let mut tokens = _Tokenizer::tokenize("everyone but @Alex, @Toto");
+        let mut tokens = Tokenizer::<Token>::new().tokenize("everyone but @Alex, @Toto");
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(
@@ -177,7 +199,7 @@ mod tests {
             Ok(Debtor::EveryoneBut(v)) if v == HashSet::from([alex.clone(), toto.clone()])
         ));
 
-        let mut tokens = _Tokenizer::tokenize("@Alex, @Toto");
+        let mut tokens = Tokenizer::<Token>::new().tokenize("@Alex, @Toto");
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(
@@ -185,7 +207,7 @@ mod tests {
             Ok(Debtor::Only(v)) if v == HashSet::from([alex, toto])
         ));
 
-        let mut tokens = _Tokenizer::tokenize("everyone");
+        let mut tokens = Tokenizer::<Token>::new().tokenize("everyone");
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(

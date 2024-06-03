@@ -46,9 +46,7 @@ impl TokenProducer for Token {
 
     fn tokenize(word: &str, buffer: &mut crate::token::Buffer) -> Option<Self> {
         match word {
-            "\"" if buffer.buffering() => buffer.take(|s| Token::LitString(s.join(" "))),
-            _ if buffer.buffering() => buffer.push(word).expect(),
-            "\"" => buffer.expect(),
+            "\"" => buffer.until_done('"', |s| Token::LitString(s)),
             "{" => Some(Self::BraceOpen),
             "}" => Some(Self::BraceClose),
             "(" => Some(Self::ParenOpen),

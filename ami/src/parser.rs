@@ -57,7 +57,7 @@ pub trait Parser {
         let mut tokens = tokens.peekable();
         loop {
             let Some(token) = tokens.next() else {
-                break Err("Unexpected end of input".to_string());
+                break Err("Unexpected end of input: too few tokens to complete".to_string());
             };
             let next = tokens.peek();
             match self.consume(token, next) {
@@ -84,7 +84,7 @@ pub trait Parser {
                 ParseResult::Complete(res) => acc.push(res),
                 ParseResult::Failed(err) => break Err(err),
                 ParseResult::Accepted if next.is_none() => {
-                    break (Err("Unexpected end of input".to_string()))
+                    break (Err("Unexpected end of input: parsing interupted".to_string()))
                 }
                 ParseResult::Accepted => continue,
                 ParseResult::Ignored(_) => panic!(),
@@ -109,7 +109,7 @@ pub trait Parser {
                 "Unexpected {} at ln {}, col {}",
                 token.token, token.row, token.col
             ),
-            None => "Unexpected end of input".to_string(),
+            None => "Failed to parse".to_string(),
         })
     }
 
@@ -832,7 +832,7 @@ mod tests {
 
         let mut tokens = make_line([Token::BraceOpen]);
         let res = p.run_to_exhaustion(&mut tokens);
-        assert_eq!(res, Err("Unexpected end of input".to_string()));
+        assert_eq!(res, Err("Unexpected end of input: parsing interupted".to_string()));
     }
 
     #[test]

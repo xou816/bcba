@@ -103,30 +103,43 @@ impl _Tokenizer {
 
 #[derive(Default)]
 pub struct Buffer {
-    buffer: Vec<String>,
+    buffer: String,
     pos: (usize, usize),
-    buffering: bool,
+    until: Option<char>,
 }
 
 impl Buffer {
-    pub fn take<T>(&mut self, f: impl FnOnce(Vec<String>) -> T) -> Option<T> {
-        self.buffering = false;
-        Some(f(self.buffer.drain(..).collect()))
+    pub fn done<T>(&mut self, f: impl FnOnce(String) -> T) -> Option<T> {
+        self.until = None;
+        Some(f(std::mem::take(&mut self.buffer)))
     }
 
     pub fn push(&mut self, s: &str) -> &mut Self {
-        self.buffering = true;
-        self.buffer.push(s.to_string());
+        self.buffer.push_str(s);
         self
     }
 
-    pub fn expect<T>(&mut self) -> Option<T> {
-        self.buffering = true;
+    pub fn until<T>(&mut self, c: char) -> Option<T> {
+        self.until = Some(c);
         None
     }
 
+    pub fn until_done<T>(&mut self, c: char, f: impl FnOnce(String) -> T) -> Option<T> {
+        match self.until {
+            Some(_) => {
+                self.until = None;
+                Some(f(std::mem::take(&mut self.buffer)))
+            }
+            None => {
+                self.until = Some(c);
+                None
+            }
+        }
+    }
+
+
     pub fn buffering(&self) -> bool {
-        self.buffering
+        self.until.is_some()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -171,7 +184,7 @@ where
         match word {
             "\n" => {
                 self.col = 1;
-            self.row += 1;
+                self.row += 1;
             },
             _ => self.col += word.graphemes(true).count(),
         }
@@ -184,12 +197,19 @@ where
             .filter_map(move |word| {
                 self.compute_pos(word);
 
-                if word != "\n" && word.chars().all(char::is_whitespace) {
+                let is_whitespace = word != "\n" && word.chars().all(char::is_whitespace);
+                if is_whitespace && !self.buffer.buffering() {
                     return None;
                 }
-                let token = P::tokenize(word, &mut self.buffer)?;
-                let (row, col) = self.buffer.pos;
-                Some(Annotated { token, row, col })
+
+                if !self.buffer.buffering() || self.buffer.until == word.chars().next() {
+                    let token = P::tokenize(word, &mut self.buffer)?;
+                    let (row, col) = self.buffer.pos;
+                    Some(Annotated { token, row, col })
+                } else {
+                    self.buffer.push(word);
+                    None
+                }
             })
     }
 }
@@ -202,7 +222,7 @@ mod tests {
     #[test]
     fn test_v2() {
         let tokens: Vec<Annotated<Token>> = Tokenizer::<Token>::new()
-            .tokenize("if true {\nprint(\"hellô world\")\n}")
+            .tokenize("if true {\nprint(\"hellô  world\")\n}")
             .collect();
         let expected = vec![
             Token::If.at(1, 1),
@@ -211,9 +231,9 @@ mod tests {
             Token::LineEnd.at(1, 10),
             Token::Identifier("print".to_owned()).at(2, 1),
             Token::ParenOpen.at(2, 6),
-            Token::LitString("hellô world".to_owned()).at(2, 7),
-            Token::ParenClose.at(2, 20),
-            Token::LineEnd.at(2, 21),
+            Token::LitString("hellô  world".to_owned()).at(2, 7),
+            Token::ParenClose.at(2, 21),
+            Token::LineEnd.at(2, 22),
             Token::BraceClose.at(3, 1),
         ];
         assert_eq!(expected, tokens);

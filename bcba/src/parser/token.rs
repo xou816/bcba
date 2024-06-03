@@ -1,16 +1,17 @@
 use std::fmt::Display;
 
-use ami::token::TokenDeserialize;
+use ami::token::TokenProducer;
 
 #[derive(Debug, Eq, Clone)]
 pub enum Token {
     NameAnchor,
     LedgerEntryStart,
     DollarSymbol,
-    CommentStart,
-    CommentEnd,
+    Comment(String),
     KeywordPaid,
     KeywordFor,
+    KeywordEveryone,
+    KeywordBut,
     LineEnd,
     Comma,
     Word(String),
@@ -24,11 +25,12 @@ impl Display for Token {
             Token::NameAnchor => write!(f, "name anchor `@`"),
             Token::Word(w) => write!(f, "token `{}`", w),
             Token::DollarSymbol => write!(f, "currency tag `$`"),
-            Token::CommentStart => write!(f, "start of comment `(`"),
-            Token::CommentEnd => write!(f, "end of comment `)`"),
+            Token::Comment(_) => write!(f, "comment"),
             Token::KeywordFor => write!(f, "keyword `for`"),
             Token::LineEnd => write!(f, "end of line"),
             Token::Comma => write!(f, "comma"),
+            Token::KeywordEveryone => write!(f, "keyword `everyone`"),
+            Token::KeywordBut => write!(f, "keyword `but`"),
         }
     }
 }
@@ -42,25 +44,23 @@ impl PartialEq for Token {
     }
 }
 
-impl TokenDeserialize for Token {
-    fn try_from_char(c: char) -> Option<Token> {
-        match c {
-            '@' => Some(Token::NameAnchor),
-            '-' => Some(Token::LedgerEntryStart),
-            '$' => Some(Token::DollarSymbol),
-            '(' => Some(Token::CommentStart),
-            ')' => Some(Token::CommentEnd),
-            '\n' => Some(Token::LineEnd),
-            ',' => Some(Token::Comma),
-            _ => None,
-        }
-    }
+impl TokenProducer for Token {
+    type Token = Self;
 
-    fn for_word(str: &str) -> Token {
-        match str {
-            "paid" => Token::KeywordPaid,
-            "for" => Token::KeywordFor,
-            _ => Token::Word(str.to_string()),
+    fn tokenize(word: &str, buffer: &mut ami::token::Buffer) -> Option<Self> {
+        match word {
+            "everyone" => Some(Token::KeywordEveryone),
+            "but" => Some(Token::KeywordBut),
+            "paid" => Some(Token::KeywordPaid),
+            "for" => Some(Token::KeywordFor),
+            "@" => Some(Token::NameAnchor),
+            "-" => Some(Token::LedgerEntryStart),
+            "$" => Some(Token::DollarSymbol),
+            "(" => buffer.until(')'),
+            ")" => buffer.done(|s| Token::Comment(s)),
+            "\n" => Some(Token::LineEnd),
+            "," => Some(Token::Comma),
+            _ => Some(Token::Word(word.to_string())),
         }
     }
 }
