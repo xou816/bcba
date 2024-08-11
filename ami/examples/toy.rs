@@ -5,6 +5,14 @@ use ami::prelude::*;
 use ami::toy::toy_tokenizer;
 use ami::toy::Token;
 use itertools::Itertools;
+use ami_derive::Parsable;
+use ami_derive::token_enum;
+
+
+#[token_enum]
+mod tokens {
+    struct Identifier(String);
+}
 
 #[derive(Debug, Clone)]
 enum Value {
@@ -117,6 +125,31 @@ enum Statement {
     Empty,
 }
 
+#[derive(Parsable)]
+#[parse(pattern = "if %expr { %statement }")]
+struct IfStatement {
+    expr: BoolExpr,
+    statement: PrintStm,
+}
+
+#[derive(Parsable)]
+#[parse(pattern = "true")]
+struct BoolExpr;
+
+#[derive(Parsable)]
+#[parse(pattern = "print(%0)")]
+struct PrintStm(StrExpr);
+
+struct StrExpr(String);
+
+impl Parsable for StrExpr {
+    type Token = Token;
+
+    fn parser() -> impl Parser<Token = Self::Token, Expression = Self> {
+        just!(Token::LitString(_w) => Self(_w))
+    }
+}
+
 impl Statement {
     fn exec(self, context: &mut HashMap<String, Value>) {
         match self {
@@ -141,7 +174,7 @@ impl Statement {
         }
     }
 
-    fn parser() -> impl Parser<Expression = Self, Token = Token> {
+    fn _parser() -> impl Parser<Expression = Self, Token = Token> {
         one_of([
             just!(Token::If)
                 .then(Expression::parser())
@@ -164,6 +197,14 @@ impl Statement {
                 .boxed(),
             just!(Token::LineEnd).map(|_| Self::Empty).boxed(),
         ])
+    }
+}
+
+impl Parsable for Statement {
+    type Token = Token;
+    
+    fn parser() -> impl Parser<Token = Self::Token, Expression = Self> {
+        Self::_parser()
     }
 }
 

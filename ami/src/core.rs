@@ -45,6 +45,14 @@ impl ParseError {
     }
 }
 
+pub trait Parsable {
+    type Token;
+    fn parser() -> impl Parser<Token = Self::Token, Expression = Self>
+    where
+        Self::Token: Display + Sized,
+        Self: Sized;
+}
+
 pub trait Parser {
     type Expression;
     type Token: Display;

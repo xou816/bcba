@@ -7,6 +7,8 @@ use std::{
     vec,
 };
 
+use crate::token::Tokenizable;
+
 use super::core::{BoxedParser, ParseResult, Parser, PeekResult};
 use super::token::Annotated;
 
@@ -49,6 +51,17 @@ pub mod parsers {
     ) -> SequenceParser<T> {
         SequenceParser {
             seq: seq.into_iter().collect(),
+            i: 0,
+            collected: vec![],
+        }
+    }
+
+    pub fn raw_sequence<T>(seq: &str) -> SequenceParser<T>
+    where
+        T: Tokenizable + 'static,
+    {
+        SequenceParser {
+            seq: T::tokenizer().tokenize(seq).map(|t| t.token).collect(),
             i: 0,
             collected: vec![],
         }

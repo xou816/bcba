@@ -9,3 +9,6 @@ name = "toy"
 [dependencies]
 itertools = "0.14.0"
 unicode-segmentation = "1.11.0"
+
+[dev-dependencies]
+ami_derive = { path = '../ami_derive' }

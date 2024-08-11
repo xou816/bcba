@@ -1,6 +1,6 @@
 use std::fmt::{Display};
 
-use crate::{token::{Annotated, Numeric64, Tokenizer}, tokenizers::*};
+use crate::{token::{Annotated, Numeric64, Tokenizable, Tokenizer}, tokenizers::*};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -99,4 +99,10 @@ pub fn toy_tokenizer<'a>() -> Tokenizer<'a, Token> {
         delimited("\"", "\"", Token::LitString),
         ignore_whitespace()
     ])
+}
+
+impl Tokenizable for Token {
+    fn tokenizer<'a>() -> Tokenizer<'a, Self> {
+        toy_tokenizer()
+    }
 }

@@ -68,6 +68,10 @@ pub mod tokenizers {
 /// Tokenizes a borrowed string to a single token T or None
 type StrTokenizer<'a, Token> = BoxedParser<'a, &'a str, Option<Annotated<Token>>>;
 
+pub trait Tokenizable where Self: Sized {
+    fn tokenizer<'a>() -> Tokenizer<'a, Self>;
+}
+
 pub struct Tokenizer<'a, Token> {
     rules: OneOfParser<'a, &'a str, Option<Annotated<Token>>>,
     col: usize,
