@@ -122,7 +122,7 @@ impl LedgerEntry {
             .then(Amount::parser())
             .then(just!(Token::KeywordFor))
             .then(Debtor::parser())
-            .then(just!(Token::Comment(_)))
+            .then(just!(Token::Comment))
             .then(just!(Token::LineEnd))
             .map(|unwind!(_, _, debtor, _, amount, _, person, _)| {
                 LedgerEntry(person, amount, debtor)
@@ -149,7 +149,7 @@ mod tests {
 
         assert!(matches!(
             tokens.next().unwrap().token,
-            Token::Comment(_)
+            Token::Comment
         ));
 
         assert!(tokens.next().is_none());
