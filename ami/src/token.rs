@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{fmt::Display, marker::PhantomData};
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -7,6 +7,12 @@ pub struct Annotated<Token> {
     pub token: Token,
     pub row: usize,
     pub col: usize,
+}
+
+impl <T: Display> Annotated<T> {
+    pub fn describe(&self) -> String {
+        format!("{} at ln {}, col {}", self.token, self.row, self.col)
+    }
 }
 
 #[derive(Default)]

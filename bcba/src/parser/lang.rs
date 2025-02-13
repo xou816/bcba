@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-use ami::prelude::*;
 use ami::parsers::*;
+use ami::prelude::*;
 use ami::token::Annotated;
 
 use super::token::Token;
@@ -19,7 +19,7 @@ impl LedgerParser {
                 .then(just!(Token::LineEnd))
                 .map(|(p, _)| Expression::PersonDeclaration(p))
                 .boxed(),
-            just!(Token::LineEnd).map(|_| Expression::None).boxed()
+            just!(Token::LineEnd).map(|_| Expression::None).boxed(),
         ]);
         parser.run_to_exhaustion(tokens)
     }
@@ -94,18 +94,15 @@ impl Debtor {
 
     pub fn parser() -> impl Parser<Token = Token, Expression = Debtor> {
         one_of([
-            sequence([
-                Token::KeywordEveryone,
-                Token::KeywordBut
-            ])
-            .then(list_of(Token::Comma, Person::parser()))
-            .map(|(_, v)| Debtor::EveryoneBut(v.into_iter().collect()))
-            .boxed(),
-            list_of(Token::Comma, Person::parser())
-                .map(|v| Debtor::Only(v.into_iter().collect()))
+            sequence([Token::KeywordEveryone, Token::KeywordBut])
+                .then(list_of(Token::Comma, Person::parser()))
+                .map(|(_, v)| Debtor::EveryoneBut(v.into_iter().collect()))
                 .boxed(),
             just!(Token::KeywordEveryone)
                 .map(|_| Debtor::EveryoneBut(HashSet::new()))
+                .boxed(),
+            list_of(Token::Comma, Person::parser())
+                .map(|v| Debtor::Only(v.into_iter().collect()))
                 .boxed(),
         ])
     }
@@ -133,8 +130,8 @@ impl LedgerEntry {
 #[cfg(test)]
 mod tests {
 
-    use ami::token::Tokenizer;
     use super::*;
+    use ami::token::Tokenizer;
 
     #[test]
     fn test_token_eq() {
@@ -147,10 +144,7 @@ mod tests {
     fn test_comment() {
         let mut tokens = Tokenizer::<Token>::new().tokenize("(salut)");
 
-        assert!(matches!(
-            tokens.next().unwrap().token,
-            Token::Comment
-        ));
+        assert!(matches!(tokens.next().unwrap().token, Token::Comment));
 
         assert!(tokens.next().is_none());
     }
@@ -169,12 +163,10 @@ mod tests {
     #[test]
     fn test_ledger_entry() {
         let mut parser = LedgerEntry::parser();
-        let mut tokens = Tokenizer::<Token>::new().tokenize("- @Foo paid $3.99 for everyone but @Bar (no reason)\n");
-        let res = parser.run_to_completion(&mut tokens);       
-        assert!(matches!(
-            res,
-            Ok(LedgerEntry(_, _, Debtor::EveryoneBut(_)))
-        ));
+        let mut tokens = Tokenizer::<Token>::new()
+            .tokenize("- @Foo paid $3.99 for everyone but @Bar (no reason)\n");
+        let res = parser.run_to_completion(&mut tokens);
+        assert!(matches!(res, Ok(LedgerEntry(_, _, Debtor::EveryoneBut(_)))));
     }
 
     #[test]
@@ -211,7 +203,7 @@ mod tests {
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(
-            res,
+            dbg!(res),
             Ok(Debtor::EveryoneBut(v)) if v == HashSet::new()
         ));
     }
