@@ -13,6 +13,9 @@ pub enum Token {
     Else,
     True,
     False,
+    And,
+    Assign,
+    Let,
     Identifier(String),
     LineEnd,
     LitString(String),
@@ -45,6 +48,9 @@ impl Display for Token {
             Token::LineEnd => write!(f, "line end"),
             Token::LitString(_) => write!(f, "string litteral"),
             Token::LitNum(_) => write!(f, "number litteral"),
+            Token::And => write!(f, "operator `and`"),
+            Token::Assign => write!(f, "`=`"),
+            Token::Let => write!(f, "keyword `let`"),
         }
     }
 }
@@ -67,6 +73,9 @@ impl TokenProducer for Token {
             "true" => Some(Token::True),
             "false" => Some(Token::False),
             "else" => Some(Token::Else),
+            "&&" => Some(Token::And),
+            "=" => Some(Token::Assign),
+            "let" => Some(Token::Let),
             _ => Some(Token::Identifier(word.to_string())),
         }
     }
