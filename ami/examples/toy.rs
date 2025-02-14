@@ -26,6 +26,10 @@ impl Value {
             Value::Str(s) => !s.is_empty(),
         }
     }
+
+    fn and(self, other: Self) -> Self {
+        Value::Bool(self.bool_coerce() && other.bool_coerce())
+    }
 }
 
 #[derive(Debug)]
@@ -35,10 +39,17 @@ enum BoolAtom {
 }
 
 impl BoolAtom {
+    fn eval(&self, context: &HashMap<String, Value>) -> Value {
+        match self {
+            Self::Lit(b) => Value::Bool(*b),
+            Self::Ref(k) => context.get(k).expect(&format!("cannot read value of {k}")).to_owned(),
+        }
+    }
+
     fn parser() -> impl Parser<Token = Token, Expression = Self> {
         one_of([
-            just!(t @ (Token::False | Token::True) => Self::Lit(t == Token::True)).boxed(),
-            just!(Token::Identifier(s) => Self::Ref(s)).boxed(),
+            just!(_t @ (Token::False | Token::True) => Self::Lit(_t == Token::True)).boxed(),
+            just!(Token::Identifier(_s) => Self::Ref(_s)).boxed(),
         ])
     }
 }
@@ -50,6 +61,13 @@ enum BoolExpression {
 }
 
 impl BoolExpression {
+    fn eval(&self, context: &HashMap<String, Value>) -> Value {
+        match self {
+            Self::Atom(a) => a.eval(context),
+            Self::And(a, ex) => a.eval(context).and(ex.eval(&context)),
+        }
+    }
+
     fn parser() -> impl Parser<Token = Token, Expression = Self> {
         one_of([
             BoolAtom::parser()
@@ -57,7 +75,7 @@ impl BoolExpression {
                 .then(lazy(Self::parser))
                 .map(|unwind!(ex, _, a)| Self::And(a, Box::new(ex)))
                 .boxed(),
-            BoolAtom::parser().map(|b| Self::Atom(b)).boxed(),
+            BoolAtom::parser().map(Self::Atom).boxed(),
         ])
     }
 }
@@ -66,19 +84,21 @@ impl BoolExpression {
 enum Expression {
     Lit(Value),
     Ref(String),
-    // BoolExpression(BoolExpression)
+    BoolExpression(BoolExpression)
 }
 
 impl Expression {
-    fn eval<'a>(&'a self, context: &'a HashMap<String, Value>) -> &'a Value {
+    fn eval(&self, context: &HashMap<String, Value>) -> Value {
         match self {
-            Expression::Lit(value) => value,
-            Expression::Ref(k) => context.get(k).expect("unresolved var"),
+            Self::Lit(value) => value.clone(),
+            Self::Ref(k) => context.get(k).expect("unresolved var").clone(),
+            Self::BoolExpression(ex) => ex.eval(context)
         }
     }
 
     fn parser() -> impl Parser<Token = Token, Expression = Self> {
         one_of([
+            BoolExpression::parser().map(Self::BoolExpression).boxed(),
             just!(Token::LitString(s) => Self::Lit(Value::Str(s))).boxed(),
             just!(t @ (Token::False | Token::True) => Self::Lit(Value::Bool(t == Token::True)))
                 .boxed(),
@@ -104,9 +124,7 @@ impl Statement {
                 }
             }
             Statement::CallFunc(func, args) => match func.as_str() {
-                "hello" => println!("Hello world!"),
-                "bye" => println!("Bye world!"),
-                "print" => println!("{}", args[0].eval(context).str_coerce()),
+                "print" => println!("{}", args.iter().map(|a| a.eval(context).str_coerce().to_owned()).collect::<String>()),
                 _ => {}
             },
             Statement::AssignStatement(id, exp) => {
@@ -143,12 +161,9 @@ impl Statement {
 }
 
 fn main() {
-    let mut tokens = Tokenizer::<Token>::new().tokenize("true && false");
-    let mut p = BoolExpression::parser();
-    dbg!(p.run_to_completion(&mut tokens).unwrap());
-
     let mut tokens = Tokenizer::<Token>::new().tokenize(
         r#"
+    let polite = true
     let fun = true
     let message = "lets party!"
     if polite {
@@ -157,11 +172,11 @@ fn main() {
             print(message)
         }
     }
+    print("true && false: ", true && false)
     "#,
     );
 
     let mut context = HashMap::new();
-    context.insert("polite".to_string(), Value::Bool(true));
 
     Statement::parser()
         .run_to_exhaustion(&mut tokens)

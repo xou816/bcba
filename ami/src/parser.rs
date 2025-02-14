@@ -11,7 +11,7 @@ use super::token::Annotated;
 pub enum ParseResult<Token, Result> {
     Accepted(Option<Annotated<Token>>),
     Complete(Result, Option<Annotated<Token>>),
-    Failed(String, Annotated<Token>),
+    Failed(String, Option<Annotated<Token>>),
 }
 
 impl<T, Result> ParseResult<T, Result> {
@@ -25,6 +25,12 @@ impl<T, Result> ParseResult<T, Result> {
             ParseResult::Failed(e, t) => ParseResult::Failed(e, t),
         }
     }
+}
+
+pub trait Peek {
+    type Token: Display;
+
+    fn peek(&self, token: &Annotated<Self::Token>) -> bool;
 }
 
 pub trait Parser {
@@ -90,6 +96,10 @@ pub trait Parser {
         }
     }
 
+    fn as_peek(&self) -> Option<Box<dyn Peek<Token = Self::Token> + '_>> {
+        None
+    }
+
     fn reset(&mut self);
 
     fn complete(&mut self, r: Self::Expression) -> ParseResult<Self::Token, Self::Expression> {
@@ -100,7 +110,7 @@ pub trait Parser {
     fn fail(
         &mut self,
         message: String,
-        token: Annotated<Self::Token>,
+        token: Option<Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
         self.reset();
         ParseResult::Failed(message, token)
@@ -114,7 +124,7 @@ pub trait Parser {
         self.reset();
         ParseResult::Failed(
             format!("{}: unexpected {}", message, token.describe()),
-            token,
+            Some(token),
         )
     }
 
@@ -212,11 +222,22 @@ where
                 .try_consume(token, next_token)
                 .map_result(|b| (self.cur_result.take().unwrap(), b))
         } else {
+            let peek_ok = || match (self.next.as_peek(), next_token) {
+                (Some(peek), Some(t)) => peek.peek(t),
+                (None, _) => true,
+                _ => false,
+            };
             match self.cur.try_consume(token, next_token) {
                 ParseResult::Accepted(t) => ParseResult::Accepted(t),
-                ParseResult::Complete(a, t) => {
+                ParseResult::Complete(a, t) if peek_ok() => {
                     self.cur_result = Some(a);
                     ParseResult::Accepted(t)
+                }
+                ParseResult::Complete(_, t) => {
+                    let desc = next_token
+                        .map(|t| t.describe())
+                        .unwrap_or("token".to_string());
+                    self.fail(format!("Failed to parse, unexpected {desc}"), t)
                 }
                 ParseResult::Failed(e, t) => ParseResult::Failed(e, t),
             }
@@ -324,7 +345,10 @@ where
     ) -> ParseResult<Self::Token, Self::Expression> {
         let Self { seq, i, collected } = self;
         let Some(cur) = seq.get(*i) else {
-            return ParseResult::Failed("Expected to parse at least one token".to_string(), token);
+            return ParseResult::Failed(
+                "Expected to parse at least one token".to_string(),
+                Some(token),
+            );
         };
         let next = seq.get(*i + 1);
         let success = &token.token == cur && next_token.map(|t| &t.token) == next || next == None;
@@ -347,7 +371,7 @@ where
                 let expected = next.map(|n| format!(", expected {n}")).unwrap_or_default();
                 self.fail(
                     format!("Failed to parse sequence: unexpected {desc}{expected}"),
-                    token,
+                    Some(token),
                 )
             }
         }
@@ -360,16 +384,27 @@ where
 }
 
 pub struct SingleParser<T, E> {
-    token_matches: Box<dyn Fn(Annotated<T>, Option<&Annotated<T>>) -> Result<E, Annotated<T>>>,
+    token_matches: Box<dyn Fn(&Annotated<T>) -> bool>,
+    map_match: Box<dyn Fn(Annotated<T>) -> Result<E, Annotated<T>>>,
 }
 
 impl<T, E> SingleParser<T, E> {
     pub fn new(
-        token_matches: impl Fn(Annotated<T>, Option<&Annotated<T>>) -> Result<E, Annotated<T>> + 'static,
+        token_matches: impl Fn(&Annotated<T>) -> bool + 'static,
+        map_match: impl Fn(Annotated<T>) -> Result<E, Annotated<T>> + 'static,
     ) -> Self {
         Self {
             token_matches: Box::new(token_matches),
+            map_match: Box::new(map_match),
         }
+    }
+}
+
+impl<T: Display, E> Peek for &SingleParser<T, E> {
+    type Token = T;
+
+    fn peek(&self, token: &Annotated<Self::Token>) -> bool {
+        (self.token_matches)(&token)
     }
 }
 
@@ -380,13 +415,17 @@ impl<T: Display, E> Parser for SingleParser<T, E> {
     fn try_consume(
         &mut self,
         token: Annotated<Self::Token>,
-        next_token: Option<&Annotated<Self::Token>>,
+        _: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
-        let token_matches = &self.token_matches;
-        match token_matches(token, next_token) {
+        let map_match = &self.map_match;
+        match map_match(token) {
             Ok(r) => self.complete(r),
             Err(t) => self.fail_token("Failed to parse single token", t),
         }
+    }
+
+    fn as_peek(&self) -> Option<Box<dyn Peek<Token = Self::Token> + '_>> {
+        Some(Box::new(self))
     }
 
     fn reset(&mut self) {}
@@ -481,7 +520,7 @@ impl<T, E> OneOfParser<T, E> {
 
 impl<T, E> Parser for OneOfParser<T, E>
 where
-    T: Display,
+    T: Display + Clone,
 {
     type Expression = E;
     type Token = T;
@@ -492,15 +531,18 @@ where
         next_token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
         let result = self.0.iter_mut().filter(|p| p.is_candidate).fold(
-            ParseResult::Failed("Unreachable".to_string(), token),
+            ParseResult::Failed("Unreachable".to_string(), Some(token.clone())),
             |res, p| match res {
-                ParseResult::Failed(_, token) => match p.parser.try_consume(token, next_token) {
-                    r @ ParseResult::Accepted(_) => r,
-                    r => {
-                        p.is_candidate = false;
-                        r
+                ParseResult::Failed(_, failed_token) => {
+                    let t = failed_token.unwrap_or_else(|| token.clone());
+                    match p.parser.try_consume(t, next_token) {
+                        r @ ParseResult::Accepted(_) => r,
+                        r => {
+                            p.is_candidate = false;
+                            r
+                        }
                     }
-                },
+                }
                 _ => {
                     p.is_candidate = false;
                     res
@@ -708,11 +750,9 @@ where
                     }
                 }
                 ParseResult::Failed(_, t) if self.acc.is_empty() => {
-                    ParseResult::Complete(vec![], Some(t))
+                    ParseResult::Complete(vec![], t)
                 }
-                ParseResult::Failed(_, t) => {
-                    self.fail_token("Expected list element", t)
-                }
+                ParseResult::Failed(_, t) => self.fail("Expected list element".to_string(), t),
             },
         }
     }
@@ -735,20 +775,24 @@ macro_rules! unwind {
 #[macro_export]
 macro_rules! just {
     ($pattern:pat $(if $guard:expr)? $(,)? => $result:expr) => {
-        $crate::parser::SingleParser::new(|t, _| {
-            match t {
-                $crate::token::Annotated { token: $pattern, .. } $(if $guard)? => Ok($result),
-                t => Err(t)
-            }
-        })
+        $crate::parser::SingleParser::new(
+            |t| matches!(t, $crate::token::Annotated { token: $pattern, .. } $(if $guard)?),
+            |t| {
+                match t {
+                    $crate::token::Annotated { token: $pattern, .. } $(if $guard)? => Ok($result),
+                    t => Err(t)
+                }
+            })
     };
     ($pattern:pat $(if $guard:expr)? $(,)?) => {
-        $crate::parser::SingleParser::new(|t, _| {
-            match t {
-                $crate::token::Annotated { token: $pattern, .. } $(if $guard)? => Ok(()),
-                t => Err(t)
-            }
-        })
+        $crate::parser::SingleParser::new(
+            |t| matches!(t, $crate::token::Annotated { token: $pattern, .. } $(if $guard)?),
+            |t| {
+                match t {
+                    $crate::token::Annotated { token: $pattern, .. } $(if $guard)? => Ok(()),
+                    t => Err(t)
+                }
+            })
     };
 }
 
@@ -900,7 +944,10 @@ mod tests {
         let res = parser.run_to_completion(&mut tokens);
         assert_eq!(
             res,
-            Err("Expected list element: unexpected closing parenthesis `)` at ln 1, col 4".to_string())
+            Err(
+                "Expected list element: unexpected closing parenthesis `)` at ln 1, col 4"
+                    .to_string()
+            )
         );
     }
 
