@@ -1,17 +1,25 @@
 #![allow(dead_code)]
 use std::{
+    cell::{Ref, RefCell, RefMut},
     fmt::{Debug, Display},
     marker::PhantomData,
+    ops::DerefMut,
     vec,
 };
 
 use super::token::Annotated;
 
+pub enum ParseStatus {
+    Accepted,
+    Complete,
+    Failed(String),
+}
+
 #[derive(Debug)]
 pub enum ParseResult<Token, Result> {
     Accepted(Option<Annotated<Token>>),
     Complete(Result, Option<Annotated<Token>>),
-    Failed(String, Option<Annotated<Token>>),
+    Failed(String, Annotated<Token>),
 }
 
 impl<T, Result> ParseResult<T, Result> {
@@ -36,6 +44,8 @@ pub trait Peek {
 pub trait Parser {
     type Expression;
     type Token: Display;
+
+    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus;
 
     fn try_consume(
         &mut self,
@@ -110,7 +120,7 @@ pub trait Parser {
     fn fail(
         &mut self,
         message: String,
-        token: Option<Annotated<Self::Token>>,
+        token: Annotated<Self::Token>,
     ) -> ParseResult<Self::Token, Self::Expression> {
         self.reset();
         ParseResult::Failed(message, token)
@@ -124,7 +134,7 @@ pub trait Parser {
         self.reset();
         ParseResult::Failed(
             format!("{}: unexpected {}", message, token.describe()),
-            Some(token),
+            token,
         )
     }
 
@@ -147,6 +157,7 @@ pub trait Parser {
     fn then<P: Parser>(self, p: P) -> ThenParser<Self, P>
     where
         Self: Sized,
+        P: Parser<Token = Self::Token>,
     {
         ThenParser {
             cur: self,
@@ -167,8 +178,25 @@ pub struct LazyParser<P>
 where
     P: Parser,
 {
-    parser: Option<P>,
+    parser: RefCell<Option<P>>,
     get: Box<dyn Fn() -> P>,
+}
+
+impl<P> LazyParser<P>
+where
+    P: Parser,
+{
+    fn get_parser(&self) -> impl DerefMut<Target = P> + '_ {
+        let initialized = {
+            let cur = self.parser.borrow();
+            cur.is_some()
+        };
+        if !initialized {
+            let new_parser = (self.get)();
+            self.parser.borrow_mut().replace(new_parser);
+        }
+        RefMut::map(self.parser.borrow_mut(), |p| p.as_mut().unwrap())
+    }
 }
 
 impl<P> Parser for LazyParser<P>
@@ -179,25 +207,28 @@ where
     type Expression = P::Expression;
     type Token = P::Token;
 
+    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+        self.get_parser().peek(token)
+    }
+
     fn try_consume(
         &mut self,
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
-        let mut parser = self.parser.take().unwrap_or_else(&self.get);
-        let result = parser.try_consume(token, next_token);
-        self.parser.replace(parser);
+        let result = self.get_parser().try_consume(token, next_token);
         result
     }
 
     fn reset(&mut self) {
-        self.parser = None;
+        *self.parser.borrow_mut() = None;
     }
 }
 
 pub struct ThenParser<A, B>
 where
     A: Parser,
+    B: Parser<Token = A::Token>,
 {
     cur: A,
     cur_result: Option<A::Expression>,
@@ -212,6 +243,16 @@ where
     type Expression = (A::Expression, B::Expression);
     type Token = A::Token;
 
+    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+        match self.cur_result {
+            Some(_) => self.next.peek(token),
+            None => match self.cur.peek(token) {
+                ParseStatus::Complete => ParseStatus::Accepted,
+                s => s,
+            },
+        }
+    }
+
     fn try_consume(
         &mut self,
         token: Annotated<Self::Token>,
@@ -222,22 +263,23 @@ where
                 .try_consume(token, next_token)
                 .map_result(|b| (self.cur_result.take().unwrap(), b))
         } else {
-            let peek_ok = || match (self.next.as_peek(), next_token) {
-                (Some(peek), Some(t)) => peek.peek(t),
-                (None, _) => true,
-                _ => false,
+            let next_peek = next_token.map(|n| self.next.peek(n));
+            let peek_error = match (self.cur.peek(&token), next_peek) {
+                (ParseStatus::Complete, Some(ParseStatus::Failed(e))) => {
+                    let desc = next_token.unwrap().describe();
+                    Some(format!("{e}: unexpected {desc}"))
+                }
+                (ParseStatus::Failed(e), _) => Some(e),
+                _ => None,
             };
+            if let Some(peek_error) = peek_error {
+                return self.fail(peek_error, token);
+            }
             match self.cur.try_consume(token, next_token) {
                 ParseResult::Accepted(t) => ParseResult::Accepted(t),
-                ParseResult::Complete(a, t) if peek_ok() => {
+                ParseResult::Complete(a, t) => {
                     self.cur_result = Some(a);
                     ParseResult::Accepted(t)
-                }
-                ParseResult::Complete(_, t) => {
-                    let desc = next_token
-                        .map(|t| t.describe())
-                        .unwrap_or("token".to_string());
-                    self.fail(format!("Failed to parse, unexpected {desc}"), t)
                 }
                 ParseResult::Failed(e, t) => ParseResult::Failed(e, t),
             }
@@ -257,7 +299,7 @@ pub mod parsers {
 
     pub fn lazy<P: Parser + 'static>(p: impl Fn() -> P + 'static) -> LazyParser<P> {
         LazyParser {
-            parser: None,
+            parser: RefCell::new(None),
             get: Box::new(p),
         }
     }
@@ -310,19 +352,19 @@ pub mod parsers {
         }
     }
 
-    #[deprecated]
-    pub fn discard_delimited<T>(delimiter: [T; 2]) -> DelimitedParser<DiscardUntil<T>>
-    where
-        T: Display + Clone + Eq + 'static,
-    {
-        let end = delimiter[1].clone();
-        DelimitedParser {
-            delimiter,
-            inner_result: None,
-            inner_parser: DiscardUntil(end),
-            started: false,
-        }
-    }
+    // #[deprecated]
+    // pub fn discard_delimited<T>(delimiter: [T; 2]) -> DelimitedParser<DiscardUntil<T>>
+    // where
+    //     T: Display + Clone + Eq + 'static,
+    // {
+    //     let end = delimiter[1].clone();
+    //     DelimitedParser {
+    //         delimiter,
+    //         inner_result: None,
+    //         inner_parser: DiscardUntil(end),
+    //         started: false,
+    //     }
+    // }
 }
 
 pub struct SequenceParser<T> {
@@ -338,6 +380,20 @@ where
     type Expression = Vec<T>;
     type Token = T;
 
+    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+        let Self { seq, i, .. } = self;
+        let Some(cur) = seq.get(*i) else {
+            return ParseStatus::Failed("Expected to parse at least one token".to_string());
+        };
+        let expecting_more = seq.get(*i + 1).is_some();
+        let success = &token.token == cur;
+        match (success, expecting_more) {
+            (true, false) => ParseStatus::Complete,
+            (true, true) => ParseStatus::Accepted,
+            (false, _) => ParseStatus::Failed(format!("Failed to parse sequence")),
+        }
+    }
+
     fn try_consume(
         &mut self,
         token: Annotated<Self::Token>,
@@ -347,7 +403,7 @@ where
         let Some(cur) = seq.get(*i) else {
             return ParseResult::Failed(
                 "Expected to parse at least one token".to_string(),
-                Some(token),
+                token,
             );
         };
         let next = seq.get(*i + 1);
@@ -371,7 +427,7 @@ where
                 let expected = next.map(|n| format!(", expected {n}")).unwrap_or_default();
                 self.fail(
                     format!("Failed to parse sequence: unexpected {desc}{expected}"),
-                    Some(token),
+                    token,
                 )
             }
         }
@@ -412,6 +468,13 @@ impl<T: Display, E> Parser for SingleParser<T, E> {
     type Expression = E;
     type Token = T;
 
+    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+        match (self.token_matches)(&token) {
+            true => ParseStatus::Complete,
+            false => ParseStatus::Failed("Failed to parse single token".to_string()),
+        }
+    }
+
     fn try_consume(
         &mut self,
         token: Annotated<Self::Token>,
@@ -446,6 +509,10 @@ impl<T: Display, E> Parser for CompletingParser<T, E> {
     }
 
     fn reset(&mut self) {}
+
+    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+        ParseStatus::Complete
+    }
 }
 
 pub type BoxedParser<T, E> = Box<dyn Parser<Token = T, Expression = E>>;
@@ -453,6 +520,10 @@ pub type BoxedParser<T, E> = Box<dyn Parser<Token = T, Expression = E>>;
 impl<T: Display, E> Parser for BoxedParser<T, E> {
     type Expression = E;
     type Token = T;
+
+    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+        self.as_ref().peek(token)
+    }
 
     fn try_consume(
         &mut self,
@@ -477,6 +548,10 @@ where
 {
     type Expression = U;
     type Token = P::Token;
+
+    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+        self.0.peek(token)
+    }
 
     fn try_consume(
         &mut self,
@@ -525,17 +600,26 @@ where
     type Expression = E;
     type Token = T;
 
+    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+        self.0.iter().filter(|p| p.is_candidate).fold(
+            ParseStatus::Failed("No expression matched".to_string()),
+            |res, p| match res {
+                ParseStatus::Failed(_) => p.parser.peek(token),
+                s => s,
+            },
+        )
+    }
+
     fn try_consume(
         &mut self,
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
         let result = self.0.iter_mut().filter(|p| p.is_candidate).fold(
-            ParseResult::Failed("Unreachable".to_string(), Some(token.clone())),
+            ParseResult::Failed("No expression matched".to_string(), token),
             |res, p| match res {
                 ParseResult::Failed(_, failed_token) => {
-                    let t = failed_token.unwrap_or_else(|| token.clone());
-                    match p.parser.try_consume(t, next_token) {
+                    match p.parser.try_consume(failed_token, next_token) {
                         r @ ParseResult::Accepted(_) => r,
                         r => {
                             p.is_candidate = false;
@@ -563,28 +647,28 @@ where
     }
 }
 
-pub struct DiscardUntil<T>(T);
+// pub struct DiscardUntil<T>(T);
 
-impl<T> Parser for DiscardUntil<T>
-where
-    T: Display + Eq,
-{
-    type Expression = ();
-    type Token = T;
+// impl<T> Parser for DiscardUntil<T>
+// where
+//     T: Display + Eq,
+// {
+//     type Expression = ();
+//     type Token = T;
 
-    fn try_consume(
-        &mut self,
-        _: Annotated<Self::Token>,
-        next_token: Option<&Annotated<Self::Token>>,
-    ) -> ParseResult<Self::Token, Self::Expression> {
-        match next_token {
-            Some(Annotated { token, .. }) if token == &self.0 => ParseResult::Complete((), None),
-            _ => ParseResult::Accepted(None),
-        }
-    }
+//     fn try_consume(
+//         &mut self,
+//         _: Annotated<Self::Token>,
+//         next_token: Option<&Annotated<Self::Token>>,
+//     ) -> ParseResult<Self::Token, Self::Expression> {
+//         match next_token {
+//             Some(Annotated { token, .. }) if token == &self.0 => ParseResult::Complete((), None),
+//             _ => ParseResult::Accepted(None),
+//         }
+//     }
 
-    fn reset(&mut self) {}
-}
+//     fn reset(&mut self) {}
+// }
 
 pub struct RepeatUntil<P: Parser> {
     parser: P,
@@ -601,6 +685,13 @@ where
     type Expression = Vec<P::Expression>;
     type Token = P::Token;
 
+    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+        match self.parser.peek(token) {
+            ParseStatus::Complete => ParseStatus::Accepted,
+            s => s
+        }
+    }
+
     fn try_consume(
         &mut self,
         token: Annotated<Self::Token>,
@@ -612,16 +703,16 @@ where
                 self.busy = true;
                 ParseResult::Accepted(t)
             }
-            ParseResult::Complete(e, _) if next_is_end => {
+            ParseResult::Complete(e, t) if next_is_end => {
                 self.acc.push(e);
-                let r = ParseResult::Complete(self.acc.drain(..).collect(), None);
+                let r = ParseResult::Complete(self.acc.drain(..).collect(), t);
                 self.reset();
                 r
             }
-            ParseResult::Complete(e, _) => {
+            ParseResult::Complete(e, t) => {
                 self.busy = false;
                 self.acc.push(e);
-                ParseResult::Accepted(None)
+                ParseResult::Accepted(t)
             }
             ParseResult::Failed(e, t) => ParseResult::Failed(e, t),
         }
@@ -633,68 +724,68 @@ where
     }
 }
 
-pub struct DelimitedParser<P>
-where
-    P: Parser,
-{
-    delimiter: [P::Token; 2],
-    inner_result: Option<P::Expression>,
-    inner_parser: P,
-    started: bool,
-}
+// pub struct DelimitedParser<P>
+// where
+//     P: Parser,
+// {
+//     delimiter: [P::Token; 2],
+//     inner_result: Option<P::Expression>,
+//     inner_parser: P,
+//     started: bool,
+// }
 
-impl<P> Parser for DelimitedParser<P>
-where
-    P: Parser,
-    P::Token: Display + Eq + Debug,
-{
-    type Expression = Option<P::Expression>;
-    type Token = P::Token;
+// impl<P> Parser for DelimitedParser<P>
+// where
+//     P: Parser,
+//     P::Token: Display + Eq + Debug,
+// {
+//     type Expression = Option<P::Expression>;
+//     type Token = P::Token;
 
-    fn try_consume(
-        &mut self,
-        token: Annotated<Self::Token>,
-        next_token: Option<&Annotated<Self::Token>>,
-    ) -> ParseResult<Self::Token, Self::Expression> {
-        let [ref start, ref end] = self.delimiter;
-        let inner_done = self.inner_result.is_some();
-        let inner_next = if next_token.map(|t| &t.token == end).unwrap_or(true) {
-            None
-        } else {
-            next_token
-        };
-        match (
-            &token.token == start,
-            &token.token == end,
-            self.started,
-            inner_done,
-        ) {
-            (true, _, false, _) => {
-                self.started = true;
-                ParseResult::Accepted(None)
-            }
-            (false, false, true, false) => match self.inner_parser.try_consume(token, inner_next) {
-                ParseResult::Complete(r, t) => {
-                    self.inner_result = Some(r);
-                    ParseResult::Accepted(t)
-                }
-                r => r.map_result(Option::Some),
-            },
-            (_, true, _, _) => {
-                let result = ParseResult::Complete(self.inner_result.take(), None);
-                self.reset();
-                result
-            }
-            _ => self.fail_token("Failed to parse delimited expression", token),
-        }
-    }
+//     fn try_consume(
+//         &mut self,
+//         token: Annotated<Self::Token>,
+//         next_token: Option<&Annotated<Self::Token>>,
+//     ) -> ParseResult<Self::Token, Self::Expression> {
+//         let [ref start, ref end] = self.delimiter;
+//         let inner_done = self.inner_result.is_some();
+//         let inner_next = if next_token.map(|t| &t.token == end).unwrap_or(true) {
+//             None
+//         } else {
+//             next_token
+//         };
+//         match (
+//             &token.token == start,
+//             &token.token == end,
+//             self.started,
+//             inner_done,
+//         ) {
+//             (true, _, false, _) => {
+//                 self.started = true;
+//                 ParseResult::Accepted(None)
+//             }
+//             (false, false, true, false) => match self.inner_parser.try_consume(token, inner_next) {
+//                 ParseResult::Complete(r, t) => {
+//                     self.inner_result = Some(r);
+//                     ParseResult::Accepted(t)
+//                 }
+//                 r => r.map_result(Option::Some),
+//             },
+//             (_, true, _, _) => {
+//                 let result = ParseResult::Complete(self.inner_result.take(), None);
+//                 self.reset();
+//                 result
+//             }
+//             _ => self.fail_token("Failed to parse delimited expression", token),
+//         }
+//     }
 
-    fn reset(&mut self) {
-        self.inner_result = None;
-        self.inner_parser.reset();
-        self.started = false;
-    }
-}
+//     fn reset(&mut self) {
+//         self.inner_result = None;
+//         self.inner_parser.reset();
+//         self.started = false;
+//     }
+// }
 
 pub struct ListParser<P>
 where
@@ -726,6 +817,17 @@ where
     type Expression = Vec<P::Expression>;
     type Token = P::Token;
 
+    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+        let is_separator = token.token == self.separator;
+        match is_separator {
+            true => ParseStatus::Accepted,
+            false => match self.item_parser.peek(token) {
+                ParseStatus::Failed(_) if self.acc.is_empty() => ParseStatus::Complete,
+                _ => ParseStatus::Accepted,
+            },
+        }
+    }
+
     fn try_consume(
         &mut self,
         token: Annotated<Self::Token>,
@@ -750,9 +852,11 @@ where
                     }
                 }
                 ParseResult::Failed(_, t) if self.acc.is_empty() => {
-                    ParseResult::Complete(vec![], t)
+                    ParseResult::Complete(vec![], Some(t))
                 }
-                ParseResult::Failed(_, t) => self.fail("Expected list element".to_string(), t),
+                ParseResult::Failed(_, t) => {
+                    self.fail_token("Expected list element", t)
+                }
             },
         }
     }
@@ -858,42 +962,42 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_delimited() {
-        let mut p = parsers::discard_delimited([Token::BraceOpen, Token::BraceClose]);
+    // #[test]
+    // fn test_delimited() {
+    //     let mut p = parsers::discard_delimited([Token::BraceOpen, Token::BraceClose]);
 
-        let mut tokens = make_line([Token::BraceOpen, Token::BraceClose]);
-        let res = p.run_to_completion(&mut tokens).unwrap();
-        assert_eq!(res, None);
+    //     let mut tokens = make_line([Token::BraceOpen, Token::BraceClose]);
+    //     let res = p.run_to_completion(&mut tokens).unwrap();
+    //     assert_eq!(res, None);
 
-        let mut tokens = make_line([
-            Token::BraceOpen,
-            Token::Identifier("something".to_string()),
-            Token::BraceClose,
-        ]);
-        let res = p.run_to_completion(&mut tokens).unwrap();
-        assert_eq!(res, None);
+    //     let mut tokens = make_line([
+    //         Token::BraceOpen,
+    //         Token::Identifier("something".to_string()),
+    //         Token::BraceClose,
+    //     ]);
+    //     let res = p.run_to_completion(&mut tokens).unwrap();
+    //     assert_eq!(res, None);
 
-        let mut tokens = make_line([
-            Token::Identifier("something".to_string()),
-            Token::BraceClose,
-        ]);
-        let res = p.run_to_exhaustion(&mut tokens);
-        assert_eq!(
-            res,
-            Err(
-                "Failed to parse delimited expression: unexpected token `something` at ln 1, col 1"
-                    .to_string()
-            )
-        );
+    //     let mut tokens = make_line([
+    //         Token::Identifier("something".to_string()),
+    //         Token::BraceClose,
+    //     ]);
+    //     let res = p.run_to_exhaustion(&mut tokens);
+    //     assert_eq!(
+    //         res,
+    //         Err(
+    //             "Failed to parse delimited expression: unexpected token `something` at ln 1, col 1"
+    //                 .to_string()
+    //         )
+    //     );
 
-        let mut tokens = make_line([Token::BraceOpen]);
-        let res = p.run_to_exhaustion(&mut tokens);
-        assert_eq!(
-            res,
-            Err("Unexpected end of input: parsing interupted".to_string())
-        );
-    }
+    //     let mut tokens = make_line([Token::BraceOpen]);
+    //     let res = p.run_to_exhaustion(&mut tokens);
+    //     assert_eq!(
+    //         res,
+    //         Err("Unexpected end of input: parsing interupted".to_string())
+    //     );
+    // }
 
     #[test]
     fn test_list_parser() {
@@ -928,7 +1032,7 @@ mod tests {
 
     #[test]
     fn test_list_parser_error() {
-        let var_parser = just!(Token::Identifier(w) => w);
+        let var_parser = just!(Token::Identifier(_w) => _w);
         let mut parser = just!(Token::ParenOpen)
             .then(list_of(Token::Comma, var_parser))
             .then(just!(Token::ParenClose))
