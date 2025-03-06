@@ -9,10 +9,10 @@ use std::{
 
 use super::token::Annotated;
 
-pub enum ParseStatus {
-    Accepted,
-    Complete,
-    Failed(String),
+pub enum PeekResult {
+    WouldAccept,
+    WouldComplete,
+    WouldFail(String),
 }
 
 #[derive(Debug)]
@@ -35,19 +35,13 @@ impl<T, Result> ParseResult<T, Result> {
     }
 }
 
-pub trait Peek {
-    type Token: Display;
-
-    fn peek(&self, token: &Annotated<Self::Token>) -> bool;
-}
-
 pub trait Parser {
     type Expression;
     type Token: Display;
 
-    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus;
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult;
 
-    fn try_consume(
+    fn parse(
         &mut self,
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
@@ -65,7 +59,7 @@ pub trait Parser {
                 break Err("Unexpected end of input: too few tokens to complete".to_string());
             };
             let peeked_token = tokens.peek();
-            match self.try_consume(token, peeked_token) {
+            match self.parse(token, peeked_token) {
                 ParseResult::Complete(res, _) => break Ok(res),
                 ParseResult::Failed(err, _) => break Err(err),
                 ParseResult::Accepted(t) => {
@@ -89,7 +83,7 @@ pub trait Parser {
                 break Ok(acc);
             };
             let next = tokens.peek();
-            match self.try_consume(token, next) {
+            match self.parse(token, next) {
                 ParseResult::Complete(res, t) => {
                     next_token = t;
                     acc.push(res)
@@ -104,10 +98,6 @@ pub trait Parser {
                 }
             }
         }
-    }
-
-    fn as_peek(&self) -> Option<Box<dyn Peek<Token = Self::Token> + '_>> {
-        None
     }
 
     fn reset(&mut self);
@@ -207,17 +197,16 @@ where
     type Expression = P::Expression;
     type Token = P::Token;
 
-    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         self.get_parser().peek(token)
     }
 
-    fn try_consume(
+    fn parse(
         &mut self,
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
-        let result = self.get_parser().try_consume(token, next_token);
-        result
+        self.get_parser().parse(token, next_token)
     }
 
     fn reset(&mut self) {
@@ -243,39 +232,41 @@ where
     type Expression = (A::Expression, B::Expression);
     type Token = A::Token;
 
-    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         match self.cur_result {
             Some(_) => self.next.peek(token),
             None => match self.cur.peek(token) {
-                ParseStatus::Complete => ParseStatus::Accepted,
+                PeekResult::WouldComplete => PeekResult::WouldAccept,
                 s => s,
             },
         }
     }
 
-    fn try_consume(
+    fn parse(
         &mut self,
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
         if self.cur_result.is_some() {
             self.next
-                .try_consume(token, next_token)
+                .parse(token, next_token)
                 .map_result(|b| (self.cur_result.take().unwrap(), b))
         } else {
-            let next_peek = next_token.map(|n| self.next.peek(n));
-            let peek_error = match (self.cur.peek(&token), next_peek) {
-                (ParseStatus::Complete, Some(ParseStatus::Failed(e))) => {
-                    let desc = next_token.unwrap().describe();
-                    Some(format!("{e}: unexpected {desc}"))
-                }
-                (ParseStatus::Failed(e), _) => Some(e),
+            let peek_error = match self.cur.peek(&token) {
+                PeekResult::WouldComplete => match next_token.map(|n| self.next.peek(n)) {
+                    Some(PeekResult::WouldFail(e)) => {
+                        let desc = next_token.unwrap().describe();
+                        Some(format!("{e}: unexpected {desc}"))
+                    }
+                    _ => None,
+                },
+                PeekResult::WouldFail(e) => Some(e),
                 _ => None,
             };
             if let Some(peek_error) = peek_error {
                 return self.fail(peek_error, token);
             }
-            match self.cur.try_consume(token, next_token) {
+            match self.cur.parse(token, next_token) {
                 ParseResult::Accepted(t) => ParseResult::Accepted(t),
                 ParseResult::Complete(a, t) => {
                     self.cur_result = Some(a);
@@ -380,31 +371,28 @@ where
     type Expression = Vec<T>;
     type Token = T;
 
-    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         let Self { seq, i, .. } = self;
         let Some(cur) = seq.get(*i) else {
-            return ParseStatus::Failed("Expected to parse at least one token".to_string());
+            return PeekResult::WouldFail("Expected to parse at least one token".to_string());
         };
         let expecting_more = seq.get(*i + 1).is_some();
         let success = &token.token == cur;
         match (success, expecting_more) {
-            (true, false) => ParseStatus::Complete,
-            (true, true) => ParseStatus::Accepted,
-            (false, _) => ParseStatus::Failed(format!("Failed to parse sequence")),
+            (true, false) => PeekResult::WouldComplete,
+            (true, true) => PeekResult::WouldAccept,
+            (false, _) => PeekResult::WouldFail(format!("Failed to parse sequence")),
         }
     }
 
-    fn try_consume(
+    fn parse(
         &mut self,
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
         let Self { seq, i, collected } = self;
         let Some(cur) = seq.get(*i) else {
-            return ParseResult::Failed(
-                "Expected to parse at least one token".to_string(),
-                token,
-            );
+            return ParseResult::Failed("Expected to parse at least one token".to_string(), token);
         };
         let next = seq.get(*i + 1);
         let success = &token.token == cur && next_token.map(|t| &t.token) == next || next == None;
@@ -456,26 +444,18 @@ impl<T, E> SingleParser<T, E> {
     }
 }
 
-impl<T: Display, E> Peek for &SingleParser<T, E> {
-    type Token = T;
-
-    fn peek(&self, token: &Annotated<Self::Token>) -> bool {
-        (self.token_matches)(&token)
-    }
-}
-
 impl<T: Display, E> Parser for SingleParser<T, E> {
     type Expression = E;
     type Token = T;
 
-    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         match (self.token_matches)(&token) {
-            true => ParseStatus::Complete,
-            false => ParseStatus::Failed("Failed to parse single token".to_string()),
+            true => PeekResult::WouldComplete,
+            false => PeekResult::WouldFail("Failed to parse single token".to_string()),
         }
     }
 
-    fn try_consume(
+    fn parse(
         &mut self,
         token: Annotated<Self::Token>,
         _: Option<&Annotated<Self::Token>>,
@@ -487,10 +467,6 @@ impl<T: Display, E> Parser for SingleParser<T, E> {
         }
     }
 
-    fn as_peek(&self) -> Option<Box<dyn Peek<Token = Self::Token> + '_>> {
-        Some(Box::new(self))
-    }
-
     fn reset(&mut self) {}
 }
 
@@ -500,7 +476,7 @@ impl<T: Display, E> Parser for CompletingParser<T, E> {
     type Expression = E;
     type Token = T;
 
-    fn try_consume(
+    fn parse(
         &mut self,
         _: Annotated<Self::Token>,
         _: Option<&Annotated<Self::Token>>,
@@ -510,8 +486,8 @@ impl<T: Display, E> Parser for CompletingParser<T, E> {
 
     fn reset(&mut self) {}
 
-    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
-        ParseStatus::Complete
+    fn peek(&self, _: &Annotated<Self::Token>) -> PeekResult {
+        PeekResult::WouldComplete
     }
 }
 
@@ -521,16 +497,16 @@ impl<T: Display, E> Parser for BoxedParser<T, E> {
     type Expression = E;
     type Token = T;
 
-    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         self.as_ref().peek(token)
     }
 
-    fn try_consume(
+    fn parse(
         &mut self,
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
-        self.as_mut().try_consume(token, next_token)
+        self.as_mut().parse(token, next_token)
     }
 
     fn reset(&mut self) {
@@ -549,16 +525,16 @@ where
     type Expression = U;
     type Token = P::Token;
 
-    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         self.0.peek(token)
     }
 
-    fn try_consume(
+    fn parse(
         &mut self,
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
-        match self.0.try_consume(token, next_token) {
+        match self.0.parse(token, next_token) {
             ParseResult::Complete(r, t) => match self.1(r) {
                 Ok(r) => self.complete(r),
                 Err(msg) => self.fail_token(&msg, t.expect("Fix this!")),
@@ -600,17 +576,17 @@ where
     type Expression = E;
     type Token = T;
 
-    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         self.0.iter().filter(|p| p.is_candidate).fold(
-            ParseStatus::Failed("No expression matched".to_string()),
+            PeekResult::WouldFail("No expression matched".to_string()),
             |res, p| match res {
-                ParseStatus::Failed(_) => p.parser.peek(token),
+                PeekResult::WouldFail(_) => p.parser.peek(token),
                 s => s,
             },
         )
     }
 
-    fn try_consume(
+    fn parse(
         &mut self,
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
@@ -618,15 +594,15 @@ where
         let result = self.0.iter_mut().filter(|p| p.is_candidate).fold(
             ParseResult::Failed("No expression matched".to_string(), token),
             |res, p| match res {
+                // Candidate not found
                 ParseResult::Failed(_, failed_token) => {
-                    match p.parser.try_consume(failed_token, next_token) {
-                        r @ ParseResult::Accepted(_) => r,
-                        r => {
-                            p.is_candidate = false;
-                            r
-                        }
+                    let result = p.parser.parse(failed_token, next_token);
+                    if !matches!(result, ParseResult::Accepted(_)) {
+                        p.is_candidate = false;
                     }
+                    result
                 }
+                // Candidate already found
                 _ => {
                     p.is_candidate = false;
                     res
@@ -685,20 +661,20 @@ where
     type Expression = Vec<P::Expression>;
     type Token = P::Token;
 
-    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         match self.parser.peek(token) {
-            ParseStatus::Complete => ParseStatus::Accepted,
-            s => s
+            PeekResult::WouldComplete => PeekResult::WouldAccept,
+            s => s,
         }
     }
 
-    fn try_consume(
+    fn parse(
         &mut self,
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
         let next_is_end = next_token.map(|t| t.token == self.end).unwrap_or(false);
-        match self.parser.try_consume(token, next_token) {
+        match self.parser.parse(token, next_token) {
             ParseResult::Accepted(t) => {
                 self.busy = true;
                 ParseResult::Accepted(t)
@@ -817,18 +793,18 @@ where
     type Expression = Vec<P::Expression>;
     type Token = P::Token;
 
-    fn peek(&self, token: &Annotated<Self::Token>) -> ParseStatus {
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         let is_separator = token.token == self.separator;
         match is_separator {
-            true => ParseStatus::Accepted,
+            true => PeekResult::WouldAccept,
             false => match self.item_parser.peek(token) {
-                ParseStatus::Failed(_) if self.acc.is_empty() => ParseStatus::Complete,
-                _ => ParseStatus::Accepted,
+                PeekResult::WouldFail(_) if self.acc.is_empty() => PeekResult::WouldComplete,
+                _ => PeekResult::WouldAccept,
             },
         }
     }
 
-    fn try_consume(
+    fn parse(
         &mut self,
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
@@ -841,7 +817,7 @@ where
         match (is_separator, next_is_end) {
             (true, true) => ParseResult::Complete(self.acc.drain(..).collect(), None),
             (true, false) => ParseResult::Accepted(None),
-            (false, _) => match self.item_parser.try_consume(token, next_token) {
+            (false, _) => match self.item_parser.parse(token, next_token) {
                 ParseResult::Accepted(t) => ParseResult::Accepted(t),
                 ParseResult::Complete(item, t) => {
                     self.acc.push(item);
@@ -854,9 +830,7 @@ where
                 ParseResult::Failed(_, t) if self.acc.is_empty() => {
                     ParseResult::Complete(vec![], Some(t))
                 }
-                ParseResult::Failed(_, t) => {
-                    self.fail_token("Expected list element", t)
-                }
+                ParseResult::Failed(_, t) => self.fail_token("Expected list element", t),
             },
         }
     }
