@@ -1,8 +1,8 @@
 use std::fmt::Display;
 
-use ami::token::TokenProducer;
+use ami::{token::TokenizerV3, tokenizers::*};
 
-#[derive(Debug, Eq, Clone)]
+#[derive(Debug, Clone)]
 pub enum Token {
     NameAnchor,
     LedgerEntryStart,
@@ -15,6 +15,7 @@ pub enum Token {
     LineEnd,
     Comma,
     Word(String),
+    Price(f64),
 }
 
 impl Display for Token {
@@ -31,6 +32,7 @@ impl Display for Token {
             Token::Comma => write!(f, "comma"),
             Token::KeywordEveryone => write!(f, "keyword `everyone`"),
             Token::KeywordBut => write!(f, "keyword `but`"),
+            Token::Price(_) => write!(f, "numeric value"),
         }
     }
 }
@@ -39,28 +41,31 @@ impl PartialEq for Token {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Word(l), Self::Word(r)) => l == r,
+            (Self::Price(l), Self::Price(r)) => l == r,
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
     }
 }
 
-impl TokenProducer for Token {
-    type Token = Self;
+impl Eq for Token {}
 
-    fn tokenize(word: &str, buffer: &mut ami::token::Buffer) -> Option<Self> {
-        match word {
-            "everyone" => Some(Token::KeywordEveryone),
-            "but" => Some(Token::KeywordBut),
-            "paid" => Some(Token::KeywordPaid),
-            "for" => Some(Token::KeywordFor),
-            "@" => Some(Token::NameAnchor),
-            "-" => Some(Token::LedgerEntryStart),
-            "$" => Some(Token::DollarSymbol),
-            "(" => buffer.until(')'),
-            ")" => buffer.done(|_| Token::Comment),
-            "\n" => Some(Token::LineEnd),
-            "," => Some(Token::Comma),
-            _ => Some(Token::Word(word.to_string())),
-        }
-    }
+pub fn tokenizer() -> TokenizerV3<Token> {
+    TokenizerV3::new(vec![
+        keyword("everyone", Token::KeywordEveryone),
+        keyword("but", Token::KeywordBut),
+        keyword("paid", Token::KeywordPaid),
+        keyword("for", Token::KeywordFor),
+        keyword("@", Token::NameAnchor),
+        keyword("-", Token::LedgerEntryStart),
+        keyword("$", Token::DollarSymbol),
+        keyword("\n", Token::LineEnd),
+        keyword(",", Token::Comma),
+        delimited("(", ")", |_| Token::Comment),
+        identifier(Token::Word),
+        numeric(|n| match n {
+            ami::token::Numeric64::Int(i) => Token::Price(i as f64),
+            ami::token::Numeric64::Float(f) => Token::Price(f),
+        }),
+        ignore_whitespace(),
+    ])
 }

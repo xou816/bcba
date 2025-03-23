@@ -33,26 +33,21 @@ pub enum Expression {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub struct Amount(pub f32);
+pub struct Amount(pub f64);
 
 impl Amount {
-    pub fn get(&self) -> f32 {
+    pub fn get(&self) -> f64 {
         self.0
     }
 
     pub fn is_zero(&self) -> bool {
-        self.0.abs() < 1.0 * f32::EPSILON
+        self.0.abs() < f64::EPSILON
     }
 
     pub fn parser() -> impl Parser<Token = Token, Expression = Amount> {
         just!(Token::DollarSymbol)
-            .then(
-                just!(Token::Word(_w) => _w).try_map(|w| match w.parse::<f32>() {
-                    Ok(price) => Ok(Amount(price)),
-                    Err(e) => Err(format!("Failed to parse f32: {}", e)),
-                }),
-            )
-            .map(|(_, a)| a)
+            .then(just!(Token::Price(_w) => _w))
+            .map(|(_, a)| Amount(a))
     }
 }
 
@@ -130,8 +125,9 @@ impl LedgerEntry {
 #[cfg(test)]
 mod tests {
 
+    use crate::parser::tokenizer;
+
     use super::*;
-    use ami::token::Tokenizer;
 
     #[test]
     fn test_token_eq() {
@@ -142,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_comment() {
-        let mut tokens = Tokenizer::<Token>::new().tokenize("(salut)");
+        let mut tokens = tokenizer().tokenize("(salut)");
 
         assert!(matches!(tokens.next().unwrap().token, Token::Comment));
 
@@ -151,7 +147,7 @@ mod tests {
 
     #[test]
     fn test_person() {
-        let mut tokens = Tokenizer::<Token>::new().tokenize("@Foo");
+        let mut tokens = tokenizer().tokenize("@Foo");
         let mut parser = Person::parser();
 
         assert!(matches!(
@@ -163,9 +159,10 @@ mod tests {
     #[test]
     fn test_ledger_entry() {
         let mut parser = LedgerEntry::parser();
-        let mut tokens = Tokenizer::<Token>::new()
-            .tokenize("- @Foo paid $3.99 for everyone but @Bar (no reason)\n");
+        let mut tokens =
+            tokenizer().tokenize("- @Foo paid $3.99 for everyone but @Bar (no reason)\n");
         let res = parser.run_to_completion(&mut tokens);
+        dbg!(&res);
         assert!(matches!(res, Ok(LedgerEntry(_, _, Debtor::EveryoneBut(_)))));
     }
 
@@ -175,7 +172,7 @@ mod tests {
         let alex = Person("Alex".to_string());
         let toto = Person("Toto".to_string());
 
-        let mut tokens = Tokenizer::<Token>::new().tokenize("everyone but @Alex");
+        let mut tokens = tokenizer().tokenize("everyone but @Alex");
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(
@@ -183,7 +180,7 @@ mod tests {
             Ok(Debtor::EveryoneBut(v)) if v == HashSet::from([alex.clone()])
         ));
 
-        let mut tokens = Tokenizer::<Token>::new().tokenize("everyone but @Alex, @Toto");
+        let mut tokens = tokenizer().tokenize("everyone but @Alex, @Toto");
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(
@@ -191,7 +188,7 @@ mod tests {
             Ok(Debtor::EveryoneBut(v)) if v == HashSet::from([alex.clone(), toto.clone()])
         ));
 
-        let mut tokens = Tokenizer::<Token>::new().tokenize("@Alex, @Toto");
+        let mut tokens = tokenizer().tokenize("@Alex, @Toto");
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(
@@ -199,7 +196,7 @@ mod tests {
             Ok(Debtor::Only(v)) if v == HashSet::from([alex, toto])
         ));
 
-        let mut tokens = Tokenizer::<Token>::new().tokenize("everyone");
+        let mut tokens = tokenizer().tokenize("everyone");
         let res = parser.run_to_completion(&mut tokens);
 
         assert!(matches!(

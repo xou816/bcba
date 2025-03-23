@@ -2,10 +2,9 @@ use clap::Parser;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use ami::token::Tokenizer;
 
 mod parser;
-use parser::{Amount, Expression, LedgerEntry, LedgerParser, Person, Token};
+use parser::{tokenizer, Amount, Expression, LedgerEntry, LedgerParser, Person};
 
 #[derive(Parser)]
 #[command(version)]
@@ -29,7 +28,7 @@ fn main() -> Result<(), String> {
                 }
                 Expression::LedgerEntry(LedgerEntry(creditor, amount, debtor_list)) => {
                     let all_debtors = debtor_list.list_persons_given(&ledger.everyone);
-                    let div = all_debtors.len() as f32;
+                    let div = all_debtors.len() as f64;
                     for debtor in all_debtors {
                         ledger.add_expense(creditor.clone(), amount.get() / div, debtor.clone());
                     }
@@ -71,14 +70,14 @@ fn main() -> Result<(), String> {
 
 fn parse(file: impl AsRef<Path>) -> Result<Vec<Expression>, String> {
     let program = std::fs::read_to_string(file).expect("File not found");
-    let mut tokens = Tokenizer::<Token>::new().tokenize(&program);
+    let mut tokens = tokenizer().tokenize(&program);
     LedgerParser::parse(&mut tokens)
 }
 
 #[derive(Serialize)]
 struct Payment {
     from: String,
-    amount: f32,
+    amount: f64,
     to: String,
 }
 
@@ -94,7 +93,7 @@ impl Ledger {
         self.everyone.insert(person);
     }
 
-    fn add_expense(&mut self, creditor: Person, amount: f32, debtor: Person) {
+    fn add_expense(&mut self, creditor: Person, amount: f64, debtor: Person) {
         let Some(current) = self.balances.get_mut(&creditor) else { panic!("Unknown person {}", creditor.name()) };
         *current = Amount(current.get() + amount);
         let Some(current) = self.balances.get_mut(&debtor) else { panic!("Unknown person {}", debtor.name()) };

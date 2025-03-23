@@ -21,118 +21,6 @@ impl<T: Display> Annotated<T> {
     }
 }
 
-#[derive(Default)]
-pub struct Buffer {
-    buffer: String,
-    pos: (usize, usize),
-    until: Option<char>,
-}
-
-impl Buffer {
-    pub fn done<T>(&mut self, f: impl FnOnce(String) -> T) -> Option<T> {
-        self.until = None;
-        Some(f(std::mem::take(&mut self.buffer)))
-    }
-
-    pub fn push(&mut self, s: &str) -> &mut Self {
-        self.buffer.push_str(s);
-        self
-    }
-
-    pub fn until<T>(&mut self, c: char) -> Option<T> {
-        self.until = Some(c);
-        None
-    }
-
-    pub fn until_done<T>(&mut self, c: char, f: impl FnOnce(String) -> T) -> Option<T> {
-        match self.until {
-            Some(_) => {
-                self.until = None;
-                Some(f(std::mem::take(&mut self.buffer)))
-            }
-            None => {
-                self.until = Some(c);
-                None
-            }
-        }
-    }
-
-    pub fn buffering(&self) -> bool {
-        self.until.is_some()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
-    }
-}
-
-pub enum Tokenize<T> {
-    Buffer,
-    Yield(T),
-}
-
-pub trait TokenProducer {
-    type Token;
-    fn tokenize(word: &str, buffer: &mut Buffer) -> Option<Self::Token>;
-}
-
-pub struct Tokenizer<P> {
-    producer: PhantomData<P>,
-    buffer: Buffer,
-    col: usize,
-    row: usize,
-}
-
-impl<P> Tokenizer<P>
-where
-    P: TokenProducer + 'static,
-{
-    pub fn new() -> Self {
-        Self {
-            producer: PhantomData,
-            buffer: Default::default(),
-            col: 1,
-            row: 1,
-        }
-    }
-
-    fn compute_pos(&mut self, word: &str) {
-        if !self.buffer.buffering() {
-            self.buffer.pos = (self.row, self.col);
-        }
-        match word {
-            "\n" => {
-                self.col = 1;
-                self.row += 1;
-            }
-            _ => self.col += word.graphemes(true).count(),
-        }
-    }
-
-    pub fn tokenize(mut self, program: &str) -> impl Iterator<Item = Annotated<P::Token>> + '_ {
-        program
-            .split_word_bounds()
-            .into_iter()
-            .filter_map(move |word| {
-                self.compute_pos(word);
-
-                let is_whitespace = word != "\n" && word.chars().all(char::is_whitespace);
-                if is_whitespace && !self.buffer.buffering() {
-                    return None;
-                }
-
-                if !self.buffer.buffering() || self.buffer.until == word.chars().next() {
-                    let token = P::tokenize(word, &mut self.buffer)?;
-                    let (row, col) = self.buffer.pos;
-                    Some(Annotated { token, row, col })
-                } else {
-                    self.buffer.push(word);
-                    None
-                }
-            })
-    }
-}
-
 pub mod tokenizers {
     use super::*;
 
@@ -159,6 +47,14 @@ pub mod tokenizers {
         T: 'static,
     {
         IdentifierTokenizer::new(target)
+    }
+
+    pub fn numeric<F, T>(target: F) -> StrTokenizer<T>
+    where
+        F: Fn(Numeric64) -> T + 'static,
+        T: 'static,
+    {
+        SimplisticNumericTokenizer::new(target)
     }
 }
 
@@ -360,11 +256,7 @@ where
     T: 'static,
     F: 'static,
 {
-    fn new(
-        left: &'static str,
-        right: &'static str,
-        target: F,
-    ) -> StrTokenizer<T> {
+    fn new(left: &'static str, right: &'static str, target: F) -> StrTokenizer<T> {
         Self {
             parsing_inner: false,
             left,
@@ -525,11 +417,174 @@ where
     }
 }
 
+pub enum Numeric64 {
+    Int(i64),
+    Float(f64),
+}
+
+enum NumericElement {
+    Dot,
+    MinusSign,
+    Digit(u32),
+}
+
+impl TryFrom<&'_ str> for NumericElement {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let char = value
+            .chars()
+            .exactly_one()
+            .map_err(|_| "Unexpected char".to_string())?;
+        if char.is_ascii_digit() {
+            return Ok(Self::Digit(char as u32 - '0' as u32));
+        }
+        match char {
+            '.' => Ok(Self::Dot),
+            '-' => Ok(Self::MinusSign),
+            _ => Err("Unexpected char".to_string()),
+        }
+    }
+}
+
+struct SimplisticNumericTokenizer<F, T>
+where
+    F: Fn(Numeric64) -> T,
+{
+    target: F,
+    neg: bool,
+    pre: Option<u32>,
+    post: Option<u32>,
+    pos: Option<(usize, usize)>,
+}
+
+impl<F, T> SimplisticNumericTokenizer<F, T>
+where
+    F: Fn(Numeric64) -> T + 'static,
+    T: 'static,
+{
+    fn new(target: F) -> StrTokenizer<T> {
+        Self {
+            target,
+            neg: false,
+            pre: None,
+            post: None,
+            pos: None,
+        }
+        .boxed()
+    }
+
+    fn make(&mut self) -> Annotated<T> {
+        let (row, col) = self.pos.take().unwrap();
+        match (self.pre, self.post) {
+            (Some(pre), None) => {
+                let pre: i64 = pre.into();
+                let neg = if self.neg { -1i64 } else { 1i64 };
+                let numeric = Numeric64::Int(neg * pre);
+                Annotated {
+                    token: (self.target)(numeric),
+                    row,
+                    col,
+                }
+            }
+            (Some(pre), Some(post)) => {
+                let pre: f64 = pre.into();
+                let post: f64 = post.into();
+                let exp = (post.log10()).floor() as i32;
+                let neg = if self.neg { -1f64 } else { 1f64 };
+                let numeric = Numeric64::Float(neg * (pre + post * 10f64.powi(-exp - 1)));
+                Annotated {
+                    token: (self.target)(numeric),
+                    row,
+                    col,
+                }
+            }
+            _ => unreachable!("wtf?"),
+        }
+    }
+}
+
+impl<F, T> Parser for SimplisticNumericTokenizer<F, T>
+where
+    F: Fn(Numeric64) -> T + 'static,
+    T: 'static,
+{
+    type Expression = Option<Annotated<T>>;
+    type Token = String;
+
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
+        match NumericElement::try_from(token.token.as_str()) {
+            Ok(_) => PeekResult::WouldAccept,
+            Err(e) => PeekResult::WouldFail(e),
+        }
+    }
+
+    fn parse(
+        &mut self,
+        token: Annotated<Self::Token>,
+        next_token: Option<&Annotated<Self::Token>>,
+    ) -> ParseResult<Self::Token, Self::Expression> {
+        if self.pos.is_none() {
+            self.pos = Some((token.row, token.col));
+        }
+
+        let el = match NumericElement::try_from(token.token.as_str()) {
+            Ok(el) => el,
+            Err(e) => return self.fail_token(&e, token),
+        };
+        let next_is_numeric = next_token
+            .map(|t| NumericElement::try_from(t.token.as_str()).is_ok())
+            .unwrap_or(false);
+        match (el, self.pre, self.post) {
+            (NumericElement::Dot, Some(_), None) => {
+                self.post = Some(0);
+                ParseResult::Accepted(None)
+            }
+            (NumericElement::MinusSign, None, None) => {
+                self.neg = true;
+                self.pre = Some(0);
+                ParseResult::Accepted(None)
+            }
+            (NumericElement::Digit(d), Some(_), Some(post)) => {
+                self.post = Some(post * 10 + d);
+                if next_is_numeric {
+                    ParseResult::Accepted(None)
+                } else {
+                    ParseResult::Complete(Some(self.make()), None)
+                }
+            }
+            (NumericElement::Digit(d), _, None) => {
+                self.pre = Some(self.pre.unwrap_or_default() * 10 + d);
+                if next_is_numeric {
+                    ParseResult::Accepted(None)
+                } else {
+                    ParseResult::Complete(Some(self.make()), None)
+                }
+            }
+            _ => self.fail_token("Unexpected numeric value", token),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.pos = None;
+        self.neg = false;
+        self.pre = None;
+        self.post = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::toy::{toy_tokenizer, Token};
 
+    fn make_line(t: &str) -> impl Iterator<Item = Annotated<String>> + '_ {
+        t.grapheme_indices(true).map(|(i, s)| Annotated {
+            token: s.to_owned(),
+            row: 1,
+            col: i + 1,
+        })
+    }
 
     #[test]
     fn test_v3() {
@@ -549,5 +604,17 @@ mod tests {
             Token::BraceClose.at(3, 1),
         ];
         assert_eq!(expected, tokens);
+    }
+
+    #[test]
+    fn test_numeric() {
+        let mut tokenizer = SimplisticNumericTokenizer::new(|n| match n {
+            Numeric64::Int(i) => Token::LitNum(i as f32),
+            Numeric64::Float(f) => Token::LitNum(f as f32),
+        });
+
+        let mut tokens = make_line("-12.989");
+        let res = tokenizer.run_to_completion(&mut tokens);
+        assert_eq!(res, Ok(Some(Token::LitNum(-12.989).at(1, 1))))
     }
 }
