@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::token::{Annotated, TokenProducer};
+use crate::{token::{Annotated, TokenizerV3}, tokenizers::*};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -57,26 +57,24 @@ impl Display for Token {
 
 impl Eq for Token {}
 
-impl TokenProducer for Token {
-    type Token = Self;
-
-    fn tokenize(word: &str, buffer: &mut crate::token::Buffer) -> Option<Self> {
-        match word {
-            "\"" => buffer.until_done('"', |s| Token::LitString(s)),
-            "&" => buffer.until_done('&', |_| Token::And),
-            "{" => Some(Self::BraceOpen),
-            "}" => Some(Self::BraceClose),
-            "(" => Some(Self::ParenOpen),
-            ")" => Some(Self::ParenClose),
-            "," => Some(Self::Comma),
-            "\n" => Some(Self::LineEnd),
-            "if" => Some(Token::If),
-            "true" => Some(Token::True),
-            "false" => Some(Token::False),
-            "else" => Some(Token::Else),
-            "=" => Some(Token::Assign),
-            "let" => Some(Token::Let),
-            _ => Some(Token::Identifier(word.to_string())),
-        }
-    }
+pub fn toy_tokenizer() -> TokenizerV3<Token> {
+    TokenizerV3::new(vec![
+        keyword("if", Token::If),
+        keyword("true", Token::True),
+        keyword("false", Token::False),
+        keyword("else", Token::Else),
+        keyword("=", Token::Assign),
+        keyword("let", Token::Let),
+        keyword("&&", Token::And),
+        keyword("{", Token::BraceOpen),
+        keyword("}", Token::BraceClose),
+        keyword("(", Token::ParenOpen),
+        keyword(")", Token::ParenClose),
+        keyword(",", Token::Comma),
+        keyword("\n", Token::LineEnd),
+        keyword("{", Token::BraceOpen),
+        identifier(Token::Identifier),
+        delimited("\"", "\"", Token::LitString),
+        ignore_whitespace()
+    ])
 }

@@ -47,7 +47,7 @@ impl Amount {
     pub fn parser() -> impl Parser<Token = Token, Expression = Amount> {
         just!(Token::DollarSymbol)
             .then(
-                just!(Token::Word(w) => w).try_map(|w| match w.parse::<f32>() {
+                just!(Token::Word(_w) => _w).try_map(|w| match w.parse::<f32>() {
                     Ok(price) => Ok(Amount(price)),
                     Err(e) => Err(format!("Failed to parse f32: {}", e)),
                 }),
@@ -73,7 +73,7 @@ impl Person {
 
     pub fn parser() -> impl Parser<Token = Token, Expression = Person> {
         just!(Token::NameAnchor)
-            .then(just!(Token::Word(w) => w))
+            .then(just!(Token::Word(_w) => _w))
             .map(|(_, name)| Person(name))
     }
 }

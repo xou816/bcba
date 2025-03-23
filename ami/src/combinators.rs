@@ -1,290 +1,19 @@
 #![allow(dead_code)]
 use std::{
-    cell::{Ref, RefCell, RefMut},
-    fmt::{Debug, Display},
+    cell::{RefCell, RefMut},
+    fmt::Display,
     marker::PhantomData,
     ops::DerefMut,
     vec,
 };
 
+use super::core::{ParseResult, Parser, PeekResult, BoxedParser};
 use super::token::Annotated;
 
-pub enum PeekResult {
-    WouldAccept,
-    WouldComplete,
-    WouldFail(String),
-}
-
-#[derive(Debug)]
-pub enum ParseResult<Token, Result> {
-    Accepted(Option<Annotated<Token>>),
-    Complete(Result, Option<Annotated<Token>>),
-    Failed(String, Annotated<Token>),
-}
-
-impl<T, Result> ParseResult<T, Result> {
-    fn map_result<F, R2>(self, f: F) -> ParseResult<T, R2>
-    where
-        F: FnOnce(Result) -> R2,
-    {
-        match self {
-            ParseResult::Complete(r, t) => ParseResult::Complete(f(r), t),
-            ParseResult::Accepted(t) => ParseResult::Accepted(t),
-            ParseResult::Failed(e, t) => ParseResult::Failed(e, t),
-        }
-    }
-}
-
-pub trait Parser {
-    type Expression;
-    type Token: Display;
-
-    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult;
-
-    fn parse(
-        &mut self,
-        token: Annotated<Self::Token>,
-        next_token: Option<&Annotated<Self::Token>>,
-    ) -> ParseResult<Self::Token, Self::Expression>;
-
-    fn run_to_completion(
-        &mut self,
-        tokens: &mut dyn Iterator<Item = Annotated<Self::Token>>,
-    ) -> Result<Self::Expression, String> {
-        let mut tokens = tokens.peekable();
-        let mut next_token: Option<Annotated<Self::Token>> = None;
-        loop {
-            next_token = next_token.or(tokens.next());
-            let Some(token) = next_token.take() else {
-                break Err("Unexpected end of input: too few tokens to complete".to_string());
-            };
-            let peeked_token = tokens.peek();
-            match self.parse(token, peeked_token) {
-                ParseResult::Complete(res, _) => break Ok(res),
-                ParseResult::Failed(err, _) => break Err(err),
-                ParseResult::Accepted(t) => {
-                    next_token = t;
-                    continue;
-                }
-            }
-        }
-    }
-
-    fn run_to_exhaustion(
-        &mut self,
-        tokens: &mut dyn Iterator<Item = Annotated<Self::Token>>,
-    ) -> Result<Vec<Self::Expression>, String> {
-        let mut tokens = tokens.peekable();
-        let mut next_token: Option<Annotated<Self::Token>> = None;
-        let mut acc: Vec<Self::Expression> = vec![];
-        loop {
-            next_token = next_token.or(tokens.next());
-            let Some(token) = next_token.take() else {
-                break Ok(acc);
-            };
-            let next = tokens.peek();
-            match self.parse(token, next) {
-                ParseResult::Complete(res, t) => {
-                    next_token = t;
-                    acc.push(res)
-                }
-                ParseResult::Failed(err, _) => break Err(err),
-                ParseResult::Accepted(_) if next.is_none() => {
-                    break Err("Unexpected end of input: parsing interupted".to_string())
-                }
-                ParseResult::Accepted(t) => {
-                    next_token = t;
-                    continue;
-                }
-            }
-        }
-    }
-
-    fn reset(&mut self);
-
-    fn complete(&mut self, r: Self::Expression) -> ParseResult<Self::Token, Self::Expression> {
-        self.reset();
-        ParseResult::Complete(r, None)
-    }
-
-    fn fail(
-        &mut self,
-        message: String,
-        token: Annotated<Self::Token>,
-    ) -> ParseResult<Self::Token, Self::Expression> {
-        self.reset();
-        ParseResult::Failed(message, token)
-    }
-
-    fn fail_token(
-        &mut self,
-        message: &str,
-        token: Annotated<Self::Token>,
-    ) -> ParseResult<Self::Token, Self::Expression> {
-        self.reset();
-        ParseResult::Failed(
-            format!("{}: unexpected {}", message, token.describe()),
-            token,
-        )
-    }
-
-    fn map<F, U>(self, f: F) -> MapParser<Self, U>
-    where
-        F: Fn(Self::Expression) -> U + 'static,
-        Self: Sized,
-    {
-        MapParser(self, Box::new(move |e| Ok(f(e))))
-    }
-
-    fn try_map<F, U>(self, f: F) -> MapParser<Self, U>
-    where
-        F: Fn(Self::Expression) -> Result<U, String> + 'static,
-        Self: Sized,
-    {
-        MapParser(self, Box::new(f))
-    }
-
-    fn then<P: Parser>(self, p: P) -> ThenParser<Self, P>
-    where
-        Self: Sized,
-        P: Parser<Token = Self::Token>,
-    {
-        ThenParser {
-            cur: self,
-            cur_result: None,
-            next: p,
-        }
-    }
-
-    fn boxed(self) -> Box<dyn Parser<Expression = Self::Expression, Token = Self::Token>>
-    where
-        Self: Sized + 'static,
-    {
-        Box::new(self)
-    }
-}
-
-pub struct LazyParser<P>
-where
-    P: Parser,
-{
-    parser: RefCell<Option<P>>,
-    get: Box<dyn Fn() -> P>,
-}
-
-impl<P> LazyParser<P>
-where
-    P: Parser,
-{
-    fn get_parser(&self) -> impl DerefMut<Target = P> + '_ {
-        let initialized = {
-            let cur = self.parser.borrow();
-            cur.is_some()
-        };
-        if !initialized {
-            let new_parser = (self.get)();
-            self.parser.borrow_mut().replace(new_parser);
-        }
-        RefMut::map(self.parser.borrow_mut(), |p| p.as_mut().unwrap())
-    }
-}
-
-impl<P> Parser for LazyParser<P>
-where
-    P: Parser,
-    P::Token: Display,
-{
-    type Expression = P::Expression;
-    type Token = P::Token;
-
-    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
-        self.get_parser().peek(token)
-    }
-
-    fn parse(
-        &mut self,
-        token: Annotated<Self::Token>,
-        next_token: Option<&Annotated<Self::Token>>,
-    ) -> ParseResult<Self::Token, Self::Expression> {
-        self.get_parser().parse(token, next_token)
-    }
-
-    fn reset(&mut self) {
-        *self.parser.borrow_mut() = None;
-    }
-}
-
-pub struct ThenParser<A, B>
-where
-    A: Parser,
-    B: Parser<Token = A::Token>,
-{
-    cur: A,
-    cur_result: Option<A::Expression>,
-    next: B,
-}
-
-impl<A, B> Parser for ThenParser<A, B>
-where
-    A: Parser,
-    B: Parser<Token = A::Token>,
-{
-    type Expression = (A::Expression, B::Expression);
-    type Token = A::Token;
-
-    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
-        match self.cur_result {
-            Some(_) => self.next.peek(token),
-            None => match self.cur.peek(token) {
-                PeekResult::WouldComplete => PeekResult::WouldAccept,
-                s => s,
-            },
-        }
-    }
-
-    fn parse(
-        &mut self,
-        token: Annotated<Self::Token>,
-        next_token: Option<&Annotated<Self::Token>>,
-    ) -> ParseResult<Self::Token, Self::Expression> {
-        if self.cur_result.is_some() {
-            self.next
-                .parse(token, next_token)
-                .map_result(|b| (self.cur_result.take().unwrap(), b))
-        } else {
-            let peek_error = match self.cur.peek(&token) {
-                PeekResult::WouldComplete => match next_token.map(|n| self.next.peek(n)) {
-                    Some(PeekResult::WouldFail(e)) => {
-                        let desc = next_token.unwrap().describe();
-                        Some(format!("{e}: unexpected {desc}"))
-                    }
-                    _ => None,
-                },
-                PeekResult::WouldFail(e) => Some(e),
-                _ => None,
-            };
-            if let Some(peek_error) = peek_error {
-                return self.fail(peek_error, token);
-            }
-            match self.cur.parse(token, next_token) {
-                ParseResult::Accepted(t) => ParseResult::Accepted(t),
-                ParseResult::Complete(a, t) => {
-                    self.cur_result = Some(a);
-                    ParseResult::Accepted(t)
-                }
-                ParseResult::Failed(e, t) => ParseResult::Failed(e, t),
-            }
-        }
-    }
-
-    fn reset(&mut self) {
-        self.cur.reset();
-        self.next.reset();
-        self.cur_result = None;
-    }
-}
 
 pub mod parsers {
+
+    use crate::core::BoxedParser;
 
     use super::*;
 
@@ -342,20 +71,57 @@ pub mod parsers {
             acc: vec![],
         }
     }
+}
 
-    // #[deprecated]
-    // pub fn discard_delimited<T>(delimiter: [T; 2]) -> DelimitedParser<DiscardUntil<T>>
-    // where
-    //     T: Display + Clone + Eq + 'static,
-    // {
-    //     let end = delimiter[1].clone();
-    //     DelimitedParser {
-    //         delimiter,
-    //         inner_result: None,
-    //         inner_parser: DiscardUntil(end),
-    //         started: false,
-    //     }
-    // }
+
+pub struct LazyParser<P>
+where
+    P: Parser,
+{
+    parser: RefCell<Option<P>>,
+    get: Box<dyn Fn() -> P>,
+}
+
+impl<P> LazyParser<P>
+where
+    P: Parser,
+{
+    fn get_parser(&self) -> impl DerefMut<Target = P> + '_ {
+        let initialized = {
+            let cur = self.parser.borrow();
+            cur.is_some()
+        };
+        if !initialized {
+            let new_parser = (self.get)();
+            self.parser.borrow_mut().replace(new_parser);
+        }
+        RefMut::map(self.parser.borrow_mut(), |p| p.as_mut().unwrap())
+    }
+}
+
+impl<P> Parser for LazyParser<P>
+where
+    P: Parser,
+    P::Token: Display,
+{
+    type Expression = P::Expression;
+    type Token = P::Token;
+
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
+        self.get_parser().peek(token)
+    }
+
+    fn parse(
+        &mut self,
+        token: Annotated<Self::Token>,
+        next_token: Option<&Annotated<Self::Token>>,
+    ) -> ParseResult<Self::Token, Self::Expression> {
+        self.get_parser().parse(token, next_token)
+    }
+
+    fn reset(&mut self) {
+        *self.parser.borrow_mut() = None;
+    }
 }
 
 pub struct SequenceParser<T> {
@@ -491,64 +257,6 @@ impl<T: Display, E> Parser for CompletingParser<T, E> {
     }
 }
 
-pub type BoxedParser<T, E> = Box<dyn Parser<Token = T, Expression = E>>;
-
-impl<T: Display, E> Parser for BoxedParser<T, E> {
-    type Expression = E;
-    type Token = T;
-
-    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
-        self.as_ref().peek(token)
-    }
-
-    fn parse(
-        &mut self,
-        token: Annotated<Self::Token>,
-        next_token: Option<&Annotated<Self::Token>>,
-    ) -> ParseResult<Self::Token, Self::Expression> {
-        self.as_mut().parse(token, next_token)
-    }
-
-    fn reset(&mut self) {
-        self.as_mut().reset()
-    }
-}
-
-pub struct MapParser<P, U>(P, Box<dyn Fn(P::Expression) -> Result<U, String>>)
-where
-    P: Parser + Sized;
-
-impl<P, U> Parser for MapParser<P, U>
-where
-    P: Parser + Sized,
-{
-    type Expression = U;
-    type Token = P::Token;
-
-    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
-        self.0.peek(token)
-    }
-
-    fn parse(
-        &mut self,
-        token: Annotated<Self::Token>,
-        next_token: Option<&Annotated<Self::Token>>,
-    ) -> ParseResult<Self::Token, Self::Expression> {
-        match self.0.parse(token, next_token) {
-            ParseResult::Complete(r, t) => match self.1(r) {
-                Ok(r) => self.complete(r),
-                Err(msg) => self.fail_token(&msg, t.expect("Fix this!")),
-            },
-            ParseResult::Accepted(t) => ParseResult::Accepted(t),
-            ParseResult::Failed(e, t) => self.fail(e, t),
-        }
-    }
-
-    fn reset(&mut self) {
-        self.0.reset();
-    }
-}
-
 pub struct CandidateParser<T, E> {
     is_candidate: bool,
     parser: BoxedParser<T, E>,
@@ -556,7 +264,7 @@ pub struct CandidateParser<T, E> {
 pub struct OneOfParser<T, E>(Vec<CandidateParser<T, E>>);
 
 impl<T, E> OneOfParser<T, E> {
-    fn new(parsers: Vec<BoxedParser<T, E>>) -> Self {
+    pub fn new(parsers: Vec<BoxedParser<T, E>>) -> Self {
         Self(
             parsers
                 .into_iter()
@@ -623,29 +331,6 @@ where
     }
 }
 
-// pub struct DiscardUntil<T>(T);
-
-// impl<T> Parser for DiscardUntil<T>
-// where
-//     T: Display + Eq,
-// {
-//     type Expression = ();
-//     type Token = T;
-
-//     fn try_consume(
-//         &mut self,
-//         _: Annotated<Self::Token>,
-//         next_token: Option<&Annotated<Self::Token>>,
-//     ) -> ParseResult<Self::Token, Self::Expression> {
-//         match next_token {
-//             Some(Annotated { token, .. }) if token == &self.0 => ParseResult::Complete((), None),
-//             _ => ParseResult::Accepted(None),
-//         }
-//     }
-
-//     fn reset(&mut self) {}
-// }
-
 pub struct RepeatUntil<P: Parser> {
     parser: P,
     busy: bool,
@@ -699,69 +384,6 @@ where
         self.acc = vec![];
     }
 }
-
-// pub struct DelimitedParser<P>
-// where
-//     P: Parser,
-// {
-//     delimiter: [P::Token; 2],
-//     inner_result: Option<P::Expression>,
-//     inner_parser: P,
-//     started: bool,
-// }
-
-// impl<P> Parser for DelimitedParser<P>
-// where
-//     P: Parser,
-//     P::Token: Display + Eq + Debug,
-// {
-//     type Expression = Option<P::Expression>;
-//     type Token = P::Token;
-
-//     fn try_consume(
-//         &mut self,
-//         token: Annotated<Self::Token>,
-//         next_token: Option<&Annotated<Self::Token>>,
-//     ) -> ParseResult<Self::Token, Self::Expression> {
-//         let [ref start, ref end] = self.delimiter;
-//         let inner_done = self.inner_result.is_some();
-//         let inner_next = if next_token.map(|t| &t.token == end).unwrap_or(true) {
-//             None
-//         } else {
-//             next_token
-//         };
-//         match (
-//             &token.token == start,
-//             &token.token == end,
-//             self.started,
-//             inner_done,
-//         ) {
-//             (true, _, false, _) => {
-//                 self.started = true;
-//                 ParseResult::Accepted(None)
-//             }
-//             (false, false, true, false) => match self.inner_parser.try_consume(token, inner_next) {
-//                 ParseResult::Complete(r, t) => {
-//                     self.inner_result = Some(r);
-//                     ParseResult::Accepted(t)
-//                 }
-//                 r => r.map_result(Option::Some),
-//             },
-//             (_, true, _, _) => {
-//                 let result = ParseResult::Complete(self.inner_result.take(), None);
-//                 self.reset();
-//                 result
-//             }
-//             _ => self.fail_token("Failed to parse delimited expression", token),
-//         }
-//     }
-
-//     fn reset(&mut self) {
-//         self.inner_result = None;
-//         self.inner_parser.reset();
-//         self.started = false;
-//     }
-// }
 
 pub struct ListParser<P>
 where
@@ -853,7 +475,7 @@ macro_rules! unwind {
 #[macro_export]
 macro_rules! just {
     ($pattern:pat $(if $guard:expr)? $(,)? => $result:expr) => {
-        $crate::parser::SingleParser::new(
+        $crate::combinators::SingleParser::new(
             |t| matches!(t, $crate::token::Annotated { token: $pattern, .. } $(if $guard)?),
             |t| {
                 match t {
@@ -863,7 +485,7 @@ macro_rules! just {
             })
     };
     ($pattern:pat $(if $guard:expr)? $(,)?) => {
-        $crate::parser::SingleParser::new(
+        $crate::combinators::SingleParser::new(
             |t| matches!(t, $crate::token::Annotated { token: $pattern, .. } $(if $guard)?),
             |t| {
                 match t {
@@ -936,46 +558,9 @@ mod tests {
         )
     }
 
-    // #[test]
-    // fn test_delimited() {
-    //     let mut p = parsers::discard_delimited([Token::BraceOpen, Token::BraceClose]);
-
-    //     let mut tokens = make_line([Token::BraceOpen, Token::BraceClose]);
-    //     let res = p.run_to_completion(&mut tokens).unwrap();
-    //     assert_eq!(res, None);
-
-    //     let mut tokens = make_line([
-    //         Token::BraceOpen,
-    //         Token::Identifier("something".to_string()),
-    //         Token::BraceClose,
-    //     ]);
-    //     let res = p.run_to_completion(&mut tokens).unwrap();
-    //     assert_eq!(res, None);
-
-    //     let mut tokens = make_line([
-    //         Token::Identifier("something".to_string()),
-    //         Token::BraceClose,
-    //     ]);
-    //     let res = p.run_to_exhaustion(&mut tokens);
-    //     assert_eq!(
-    //         res,
-    //         Err(
-    //             "Failed to parse delimited expression: unexpected token `something` at ln 1, col 1"
-    //                 .to_string()
-    //         )
-    //     );
-
-    //     let mut tokens = make_line([Token::BraceOpen]);
-    //     let res = p.run_to_exhaustion(&mut tokens);
-    //     assert_eq!(
-    //         res,
-    //         Err("Unexpected end of input: parsing interupted".to_string())
-    //     );
-    // }
-
     #[test]
     fn test_list_parser() {
-        let var_parser = just!(Token::Identifier(w) => w);
+        let var_parser = just!(Token::Identifier(_w) => _w);
         let mut parser = ListParser::new(Token::Comma, var_parser);
 
         let mut tokens = make_line([
@@ -991,7 +576,7 @@ mod tests {
 
     #[test]
     fn test_list_parser_empty() {
-        let var_parser = just!(Token::Identifier(w) => w);
+        let var_parser = just!(Token::Identifier(_w) => _w);
         let mut parser = just!(Token::ParenOpen)
             .then(list_of(Token::Comma, var_parser))
             .then(just!(Token::ParenClose))

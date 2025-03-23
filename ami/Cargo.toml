@@ -7,4 +7,5 @@ edition = "2021"
 name = "toy"
 
 [dependencies]
+itertools = "0.14.0"
 unicode-segmentation = "1.11.0"

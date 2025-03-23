@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use ami::parsers::*;
 use ami::prelude::*;
-use ami::token::Tokenizer;
+use ami::toy::toy_tokenizer;
 use ami::toy::Token;
 
 #[derive(Debug, Clone)]
@@ -99,10 +99,10 @@ impl Expression {
     fn parser() -> impl Parser<Token = Token, Expression = Self> {
         one_of([
             BoolExpression::parser().map(Self::BoolExpression).boxed(),
-            just!(Token::LitString(s) => Self::Lit(Value::Str(s))).boxed(),
-            just!(t @ (Token::False | Token::True) => Self::Lit(Value::Bool(t == Token::True)))
+            just!(Token::LitString(_s) => Self::Lit(Value::Str(_s))).boxed(),
+            just!(_t => Self::Lit(Value::Bool(_t == Token::True)))
                 .boxed(),
-            just!(Token::Identifier(s) => Self::Ref(s)).boxed(),
+            just!(Token::Identifier(_s) => Self::Ref(_s)).boxed(),
         ])
     }
 }
@@ -143,14 +143,14 @@ impl Statement {
                 .then(just!(Token::BraceClose))
                 .map(|unwind!(_, stm, _, cond, _)| Self::IfStatement(cond, stm))
                 .boxed(),
-            just!(Token::Identifier(w) => w)
+            just!(Token::Identifier(_w) => _w)
                 .then(just!(Token::ParenOpen))
                 .then(list_of(Token::Comma, Expression::parser()))
                 .then(just!(Token::ParenClose))
                 .map(|unwind!(_, args, _, func)| Self::CallFunc(func, args))
                 .boxed(),
             just!(Token::Let)
-                .then(just!(Token::Identifier(w) => w))
+                .then(just!(Token::Identifier(_w) => _w))
                 .then(just!(Token::Assign))
                 .then(Expression::parser())
                 .map(|unwind!(exp, _, id, _)| Self::AssignStatement(id, exp))
@@ -161,7 +161,7 @@ impl Statement {
 }
 
 fn main() {
-    let mut tokens = Tokenizer::<Token>::new().tokenize(
+    let mut tokens = toy_tokenizer().tokenize(
         r#"
     let polite = true
     let fun = true
