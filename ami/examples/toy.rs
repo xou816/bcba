@@ -4,6 +4,7 @@ use ami::parsers::*;
 use ami::prelude::*;
 use ami::toy::toy_tokenizer;
 use ami::toy::Token;
+use itertools::Itertools;
 
 #[derive(Debug, Clone)]
 enum Value {
@@ -42,7 +43,10 @@ impl BoolAtom {
     fn eval(&self, context: &HashMap<String, Value>) -> Value {
         match self {
             Self::Lit(b) => Value::Bool(*b),
-            Self::Ref(k) => context.get(k).expect(&format!("cannot read value of {k}")).to_owned(),
+            Self::Ref(k) => context
+                .get(k)
+                .expect(&format!("cannot read value of {k}"))
+                .to_owned(),
         }
     }
 
@@ -84,7 +88,7 @@ impl BoolExpression {
 enum Expression {
     Lit(Value),
     Ref(String),
-    BoolExpression(BoolExpression)
+    BoolExpression(BoolExpression),
 }
 
 impl Expression {
@@ -92,7 +96,7 @@ impl Expression {
         match self {
             Self::Lit(value) => value.clone(),
             Self::Ref(k) => context.get(k).expect("unresolved var").clone(),
-            Self::BoolExpression(ex) => ex.eval(context)
+            Self::BoolExpression(ex) => ex.eval(context),
         }
     }
 
@@ -100,8 +104,6 @@ impl Expression {
         one_of([
             BoolExpression::parser().map(Self::BoolExpression).boxed(),
             just!(Token::LitString(_s) => Self::Lit(Value::Str(_s))).boxed(),
-            just!(_t => Self::Lit(Value::Bool(_t == Token::True)))
-                .boxed(),
             just!(Token::Identifier(_s) => Self::Ref(_s)).boxed(),
         ])
     }
@@ -124,7 +126,12 @@ impl Statement {
                 }
             }
             Statement::CallFunc(func, args) => match func.as_str() {
-                "print" => println!("{}", args.iter().map(|a| a.eval(context).str_coerce().to_owned()).collect::<String>()),
+                "print" => println!(
+                    "{}",
+                    args.iter()
+                        .map(|a| a.eval(context).str_coerce().to_owned())
+                        .collect::<String>()
+                ),
                 _ => {}
             },
             Statement::AssignStatement(id, exp) => {
@@ -161,28 +168,37 @@ impl Statement {
 }
 
 fn main() {
-    let mut tokens = toy_tokenizer().tokenize(
-        r#"
+    let program = r#"
     let polite = true
     let fun = true
     let message = "lets party!"
     if polite {
-        print("i am polite!")
+        print("i am polite!"
         if fun {
             print(message)
         }
     }
     print("true && false: ", true && false)
-    "#,
-    );
+    "#;
+
+    let mut tokens = toy_tokenizer().tokenize(program);
 
     let mut context = HashMap::new();
 
-    Statement::parser()
-        .run_to_exhaustion(&mut tokens)
-        .unwrap()
-        .into_iter()
-        .for_each(|s| {
+    let res = Statement::parser().run_to_exhaustion(&mut tokens);
+
+    match res {
+        Ok(st) => st.into_iter().for_each(|s| {
             s.exec(&mut context);
-        });
+        }),
+        Err(e) => {
+            let ctx = toy_tokenizer()
+                .tokenize(program)
+                .skip_while(|t| t.row < e.row)
+                .take_while(|t| t.col < e.col)
+                .map(|t| t.token.render())
+                .join(" ");
+            println!("{ctx}\n{}^ {}", " ".repeat(ctx.len()), e.message)
+        }
+    }
 }

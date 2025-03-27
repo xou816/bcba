@@ -21,7 +21,7 @@ impl LedgerParser {
                 .boxed(),
             just!(Token::LineEnd).map(|_| Expression::None).boxed(),
         ]);
-        parser.run_to_exhaustion(tokens)
+        parser.run_to_exhaustion(tokens).map_err(|e| e.message)
     }
 }
 

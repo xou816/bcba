@@ -1,6 +1,6 @@
-use std::fmt::Display;
+use std::fmt::{format, Display};
 
-use crate::{token::{Annotated, TokenizerV3}, tokenizers::*};
+use crate::{token::{Annotated, Numeric64, TokenizerV3}, tokenizers::*};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -19,7 +19,7 @@ pub enum Token {
     Identifier(String),
     LineEnd,
     LitString(String),
-    LitNum(f32)
+    LitNum(Numeric64)
 }
 
 impl Token {
@@ -28,6 +28,27 @@ impl Token {
             token: self,
             row,
             col,
+        }
+    }
+
+    pub fn render(&self) -> String {
+        match self {
+            Token::BraceOpen => "{".to_owned(),
+            Token::BraceClose => "}".to_owned(),
+            Token::ParenOpen => "(".to_owned(),
+            Token::ParenClose => ")".to_owned(),
+            Token::Comma => ",".to_owned(),
+            Token::If => "if".to_owned(),
+            Token::Else => "else".to_owned(),
+            Token::True => "true".to_owned(),
+            Token::False => "false".to_owned(),
+            Token::And => "and".to_owned(),
+            Token::Assign => "=".to_owned(),
+            Token::Let => "let".to_owned(),
+            Token::Identifier(i) => i.clone(),
+            Token::LineEnd => "\n".to_owned(),
+            Token::LitString(s) => format!("\"{s}\""),
+            Token::LitNum(_) => "".to_owned(),
         }
     }
 }
@@ -74,6 +95,7 @@ pub fn toy_tokenizer() -> TokenizerV3<Token> {
         keyword("\n", Token::LineEnd),
         keyword("{", Token::BraceOpen),
         identifier(Token::Identifier),
+        numeric(Token::LitNum),
         delimited("\"", "\"", Token::LitString),
         ignore_whitespace()
     ])

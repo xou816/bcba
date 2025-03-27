@@ -417,10 +417,23 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum Numeric64 {
     Int(i64),
     Float(f64),
 }
+
+impl PartialEq for Numeric64 {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Int(l0), Self::Int(r0)) => l0 == r0,
+            (Self::Float(l0), Self::Float(r0)) => l0 == r0,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Numeric64 {}
 
 enum NumericElement {
     Dot,
@@ -532,35 +545,41 @@ where
             Ok(el) => el,
             Err(e) => return self.fail_token(&e, token),
         };
-        let next_is_numeric = next_token
-            .map(|t| NumericElement::try_from(t.token.as_str()).is_ok())
-            .unwrap_or(false);
-        match (el, self.pre, self.post) {
-            (NumericElement::Dot, Some(_), None) => {
+        let next_token = next_token.and_then(|t| NumericElement::try_from(t.token.as_str()).ok());
+        match (el, next_token, self.pre, self.post) {
+            (NumericElement::Dot, _, Some(_), None) => {
                 self.post = Some(0);
                 ParseResult::Accepted(None)
             }
-            (NumericElement::MinusSign, None, None) => {
+            (NumericElement::MinusSign, Some(NumericElement::Digit(_)), None, None) => {
                 self.neg = true;
                 self.pre = Some(0);
                 ParseResult::Accepted(None)
             }
-            (NumericElement::Digit(d), Some(_), Some(post)) => {
+            (NumericElement::Digit(d), Some(NumericElement::Digit(_)), Some(_), Some(post)) => {
                 self.post = Some(post * 10 + d);
-                if next_is_numeric {
-                    ParseResult::Accepted(None)
-                } else {
-                    ParseResult::Complete(Some(self.make()), None)
-                }
+                ParseResult::Accepted(None)
             }
-            (NumericElement::Digit(d), _, None) => {
+            (NumericElement::Digit(d), None, Some(_), Some(post)) => {
+                self.post = Some(post * 10 + d);
+                ParseResult::Complete(Some(self.make()), None)
+            }
+            (
+                NumericElement::Digit(d),
+                Some(NumericElement::Digit(_) | NumericElement::Dot),
+                _,
+                None,
+            ) => {
                 self.pre = Some(self.pre.unwrap_or_default() * 10 + d);
-                if next_is_numeric {
-                    ParseResult::Accepted(None)
-                } else {
-                    ParseResult::Complete(Some(self.make()), None)
-                }
+                ParseResult::Accepted(None)
             }
+            (
+                NumericElement::Digit(_),
+                None,
+                _,
+                None,
+            ) => ParseResult::Complete(Some(self.make()), None),
+
             _ => self.fail_token("Unexpected numeric value", token),
         }
     }
@@ -608,13 +627,10 @@ mod tests {
 
     #[test]
     fn test_numeric() {
-        let mut tokenizer = SimplisticNumericTokenizer::new(|n| match n {
-            Numeric64::Int(i) => Token::LitNum(i as f32),
-            Numeric64::Float(f) => Token::LitNum(f as f32),
-        });
+        let mut tokenizer = SimplisticNumericTokenizer::new(Token::LitNum);
 
         let mut tokens = make_line("-12.989");
         let res = tokenizer.run_to_completion(&mut tokens);
-        assert_eq!(res, Ok(Some(Token::LitNum(-12.989).at(1, 1))))
+        assert_eq!(res, Ok(Some(Token::LitNum(Numeric64::Float(-12.989)).at(1, 1))))
     }
 }

@@ -7,9 +7,8 @@ use std::{
     vec,
 };
 
-use super::core::{ParseResult, Parser, PeekResult, BoxedParser};
+use super::core::{BoxedParser, ParseResult, Parser, PeekResult};
 use super::token::Annotated;
-
 
 pub mod parsers {
 
@@ -72,7 +71,6 @@ pub mod parsers {
         }
     }
 }
-
 
 pub struct LazyParser<P>
 where
@@ -537,7 +535,7 @@ mod tests {
         let mut tokens = make_line([Token::If, Token::BraceOpen, Token::Comma]);
         let res = p.run_to_completion(&mut tokens);
         assert_eq!(
-            res,
+            res.map_err(|err| err.message),
             Err("Failed to parse sequence: unexpected comma at ln 1, col 3, expected closing brace `}`".to_string())
         );
     }
@@ -553,8 +551,8 @@ mod tests {
         let mut tokens = make_line([Token::BraceOpen, Token::If]);
         let err = p.run_to_completion(&mut tokens).err().unwrap();
         assert_eq!(
-            err,
-            "Failed to parse single token: unexpected keyword `if` at ln 1, col 2".to_string()
+            err.message,
+            "Failed to parse single token: unexpected keyword `if` at ln 1, col 2: unexpected opening brace `{` at ln 1, col 1".to_string()
         )
     }
 
@@ -606,11 +604,8 @@ mod tests {
 
         let res = parser.run_to_completion(&mut tokens);
         assert_eq!(
-            res,
-            Err(
-                "Expected list element: unexpected closing parenthesis `)` at ln 1, col 4"
-                    .to_string()
-            )
+            res.map_err(|err| err.message),
+            Err("Expected list element: unexpected closing parenthesis `)` at ln 1, col 4".to_string())
         );
     }
 

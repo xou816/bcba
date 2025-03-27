@@ -28,6 +28,22 @@ impl<T, Result> ParseResult<T, Result> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParseError {
+    pub message: String,
+    pub row: usize,
+    pub col: usize,
+}
+
+impl ParseError {
+    fn new<T>(error: String, token: &Annotated<T>) -> Self {
+        Self {
+            message: error,
+            row: token.row,
+            col: token.col,
+        }
+    }
+}
 
 pub trait Parser {
     type Expression;
@@ -44,18 +60,22 @@ pub trait Parser {
     fn run_to_completion(
         &mut self,
         tokens: &mut dyn Iterator<Item = Annotated<Self::Token>>,
-    ) -> Result<Self::Expression, String> {
+    ) -> Result<Self::Expression, ParseError> {
         let mut tokens = tokens.peekable();
         let mut next_token: Option<Annotated<Self::Token>> = None;
         loop {
             next_token = next_token.or(tokens.next());
             let Some(token) = next_token.take() else {
-                break Err("Unexpected end of input: too few tokens to complete".to_string());
+                break Err(ParseError {
+                    message: "Unexpected end of input: too few tokens to complete".to_string(),
+                    col: 0,
+                    row: 0,
+                });
             };
             let peeked_token = tokens.peek();
             match self.parse(token, peeked_token) {
                 ParseResult::Complete(res, _) => break Ok(res),
-                ParseResult::Failed(err, _) => break Err(err),
+                ParseResult::Failed(err, t) => break Err(ParseError::new(err, &t)),
                 ParseResult::Accepted(t) => {
                     next_token = t;
                     continue;
@@ -67,7 +87,7 @@ pub trait Parser {
     fn run_to_exhaustion(
         &mut self,
         tokens: &mut dyn Iterator<Item = Annotated<Self::Token>>,
-    ) -> Result<Vec<Self::Expression>, String> {
+    ) -> Result<Vec<Self::Expression>, ParseError> {
         let mut tokens = tokens.peekable();
         let mut next_token: Option<Annotated<Self::Token>> = None;
         let mut acc: Vec<Self::Expression> = vec![];
@@ -82,9 +102,13 @@ pub trait Parser {
                     next_token = t;
                     acc.push(res)
                 }
-                ParseResult::Failed(err, _) => break Err(err),
+                ParseResult::Failed(err, t) => break Err(ParseError::new(err, &t)),
                 ParseResult::Accepted(_) if next.is_none() => {
-                    break Err("Unexpected end of input: parsing interupted".to_string())
+                    break Err(ParseError {
+                        message: "Unexpected end of input: parsing interupted".to_string(),
+                        col: 0,
+                        row: 0,
+                    });
                 }
                 ParseResult::Accepted(t) => {
                     next_token = t;
@@ -208,7 +232,7 @@ where
                 _ => None,
             };
             if let Some(peek_error) = peek_error {
-                return self.fail(peek_error, token);
+                return self.fail_token(&peek_error, token);
             }
             match self.cur.parse(token, next_token) {
                 ParseResult::Accepted(t) => ParseResult::Accepted(t),
