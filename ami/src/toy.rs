@@ -1,4 +1,4 @@
-use std::fmt::{format, Display};
+use std::fmt::{Display};
 
 use crate::{token::{Annotated, Numeric64, TokenizerV3}, tokenizers::*};
 
@@ -78,7 +78,7 @@ impl Display for Token {
 
 impl Eq for Token {}
 
-pub fn toy_tokenizer() -> TokenizerV3<Token> {
+pub fn toy_tokenizer<'a>() -> TokenizerV3<'a, Token> {
     TokenizerV3::new(vec![
         keyword("if", Token::If),
         keyword("true", Token::True),

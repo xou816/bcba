@@ -24,15 +24,15 @@ impl<T: Display> Annotated<T> {
 pub mod tokenizers {
     use super::*;
 
-    pub fn keyword<T: Clone + 'static>(keyword: &str, target: T) -> StrTokenizer<T> {
+    pub fn keyword<'a, T: Clone + 'static>(keyword: &'static str, target: T) -> StrTokenizer<'a, T> {
         KeywordTokenizer::new(keyword, target)
     }
 
-    pub fn ignore_whitespace<T: 'static>() -> StrTokenizer<T> {
+    pub fn ignore_whitespace<'a, T: Clone + 'static>() -> StrTokenizer<'a, T> {
         WhitespaceTokenizer::new()
     }
 
-    pub fn delimited<F, T>(left: &'static str, right: &'static str, target: F) -> StrTokenizer<T>
+    pub fn delimited<'a, F, T>(left: &'static str, right: &'static str, target: F) -> StrTokenizer<'a, T>
     where
         F: Fn(String) -> T,
         T: 'static,
@@ -41,7 +41,7 @@ pub mod tokenizers {
         DelimitedTokenizer::new(left, right, target)
     }
 
-    pub fn identifier<F, T>(target: F) -> StrTokenizer<T>
+    pub fn identifier<'a, F, T>(target: F) -> StrTokenizer<'a, T>
     where
         F: Fn(String) -> T + 'static,
         T: 'static,
@@ -49,7 +49,7 @@ pub mod tokenizers {
         IdentifierTokenizer::new(target)
     }
 
-    pub fn numeric<F, T>(target: F) -> StrTokenizer<T>
+    pub fn numeric<'a, F, T>(target: F) -> StrTokenizer<'a, T>
     where
         F: Fn(Numeric64) -> T + 'static,
         T: 'static,
@@ -58,16 +58,16 @@ pub mod tokenizers {
     }
 }
 
-type StrTokenizer<T> = BoxedParser<String, Option<Annotated<T>>>;
+type StrTokenizer<'a, T> = BoxedParser<'a, &'a str, Option<Annotated<T>>>;
 
-pub struct TokenizerV3<Token> {
-    rules: OneOfParser<String, Option<Annotated<Token>>>,
+pub struct TokenizerV3<'a, Token> {
+    rules: OneOfParser<'a, &'a str, Option<Annotated<Token>>>,
     col: usize,
     row: usize,
 }
 
-impl<Token: 'static> TokenizerV3<Token> {
-    pub fn new(rules: Vec<StrTokenizer<Token>>) -> Self {
+impl<'a, Token: 'static> TokenizerV3<'a, Token> {
+    pub fn new(rules: Vec<StrTokenizer<'a, Token>>) -> Self {
         Self {
             rules: OneOfParser::new(rules),
             col: 1,
@@ -75,7 +75,7 @@ impl<Token: 'static> TokenizerV3<Token> {
         }
     }
 
-    fn make(&self, token: String) -> Annotated<String> {
+    fn make(&self, token: &'a str) -> Annotated<&'a str> {
         Annotated {
             token,
             row: self.row,
@@ -83,17 +83,17 @@ impl<Token: 'static> TokenizerV3<Token> {
         }
     }
 
-    pub fn tokenize(mut self, program: &'_ str) -> impl Iterator<Item = Annotated<Token>> + '_ {
+    pub fn tokenize(mut self, program: &'a str) -> impl Iterator<Item = Annotated<Token>> + 'a {
         program
             .graphemes(true)
-            .map(|g| Some(g.to_owned()))
+            .map_into()
             .chain(once(None))
             .tuple_windows()
             .filter_map(move |(cur, next)| {
                 let cur = cur.expect("tuple_windows guarantees it to be not None");
                 let cur_is_nl = cur == "\n";
-                let cur_token = self.make(cur);
-                let next_token = next.map(|n| self.make(n));
+                let cur_token = self.make(&cur);
+                let next_token = next.map(|n| self.make(&n));
                 if cur_is_nl {
                     self.col = 1;
                     self.row += 1;
@@ -109,21 +109,21 @@ impl<Token: 'static> TokenizerV3<Token> {
     }
 }
 
-struct WhitespaceTokenizer<T>(PhantomData<T>);
+struct WhitespaceTokenizer<'a, T: Clone>(PhantomData<&'a T>);
 
-impl<T: 'static> WhitespaceTokenizer<T> {
-    fn new() -> StrTokenizer<T> {
+impl<'a, T: Clone + 'static> WhitespaceTokenizer<'a, T> {
+    fn new() -> StrTokenizer<'a, T> {
         Self(PhantomData).boxed()
     }
 
-    fn matches(&self, token: &Annotated<String>) -> bool {
+    fn matches(&self, token: &Annotated<&'a str>) -> bool {
         token.token != "\n" && token.token.chars().all(char::is_whitespace)
     }
 }
 
-impl<T: 'static> Parser for WhitespaceTokenizer<T> {
+impl<'a, T: Clone + 'static> Parser for WhitespaceTokenizer<'a, T> {
     type Expression = Option<Annotated<T>>;
-    type Token = String;
+    type Token = &'a str;
 
     fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         if self.matches(token) {
@@ -148,33 +148,35 @@ impl<T: 'static> Parser for WhitespaceTokenizer<T> {
     fn reset(&mut self) {}
 }
 
-struct KeywordTokenizer<T> {
+struct KeywordTokenizer<'a, T> {
     i: usize,
     keyword: Vec<String>,
     target: T,
     pos: Option<(usize, usize)>,
+    _lifetime: PhantomData<&'a T>
 }
 
-impl<T> KeywordTokenizer<T>
+impl<'a, T> KeywordTokenizer<'a, T>
 where
     T: Clone + 'static,
 {
-    fn new(keyword: &str, target: T) -> StrTokenizer<T> {
+    fn new(keyword: &'static str, target: T) -> StrTokenizer<'a, T> {
         Self {
             i: 0,
             keyword: keyword.graphemes(true).map(|s| s.to_owned()).collect(),
             target,
             pos: None,
+            _lifetime: PhantomData
         }
         .boxed()
     }
 
-    fn ith_token_matches(&self, i: usize, token: &Annotated<String>) -> bool {
+    fn ith_token_matches(&self, i: usize, token: &Annotated<&'a str>) -> bool {
         if i >= self.keyword.len() {
             return false;
         }
 
-        Some(&token.token) == self.keyword.get(i)
+        self.keyword.get(i).map(|i| i == &token.token).unwrap_or_default()
     }
 
     fn is_last(&self) -> bool {
@@ -191,12 +193,12 @@ where
     }
 }
 
-impl<T> Parser for KeywordTokenizer<T>
+impl<'a, T> Parser for KeywordTokenizer<'a, T>
 where
     T: Clone + 'static,
 {
     type Expression = Option<Annotated<T>>;
-    type Token = String;
+    type Token = &'a str;
 
     fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         let matches = self.ith_token_matches(self.i, token);
@@ -238,7 +240,7 @@ where
     }
 }
 
-struct DelimitedTokenizer<T, F>
+struct DelimitedTokenizer<'a, T, F>
 where
     F: Fn(String) -> T,
 {
@@ -248,15 +250,16 @@ where
     target: F,
     acc: String,
     pos: Option<(usize, usize)>,
+    _lifetime: PhantomData<&'a T>
 }
 
-impl<T, F> DelimitedTokenizer<T, F>
+impl<'a, T, F> DelimitedTokenizer<'a, T, F>
 where
     F: Fn(String) -> T,
     T: 'static,
     F: 'static,
 {
-    fn new(left: &'static str, right: &'static str, target: F) -> StrTokenizer<T> {
+    fn new(left: &'static str, right: &'static str, target: F) -> StrTokenizer<'a, T> {
         Self {
             parsing_inner: false,
             left,
@@ -264,6 +267,7 @@ where
             target,
             acc: String::new(),
             pos: None,
+            _lifetime: PhantomData,
         }
         .boxed()
     }
@@ -278,14 +282,14 @@ where
     }
 }
 
-impl<T, F> Parser for DelimitedTokenizer<T, F>
+impl<'a, T, F> Parser for DelimitedTokenizer<'a, T, F>
 where
     F: Fn(String) -> T,
     T: 'static,
     F: 'static,
 {
     type Expression = Option<Annotated<T>>;
-    type Token = String;
+    type Token = &'a str;
 
     fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         if self.parsing_inner && token.token == self.right {
@@ -333,27 +337,29 @@ where
     }
 }
 
-struct IdentifierTokenizer<T, F2>
+struct IdentifierTokenizer<'a, T, F2>
 where
     F2: Fn(String) -> T,
 {
-    expect: Box<dyn Fn(&String) -> bool>,
+    expect: Box<dyn Fn(&'a str) -> bool>,
     target: F2,
     acc: String,
     pos: Option<(usize, usize)>,
+    _lifetime: PhantomData<&'a T>
 }
 
-impl<T, F2> IdentifierTokenizer<T, F2>
+impl<'a, T, F2> IdentifierTokenizer<'a, T, F2>
 where
     F2: Fn(String) -> T + 'static,
     T: 'static,
 {
-    fn new(target: F2) -> StrTokenizer<T> {
+    fn new(target: F2) -> StrTokenizer<'a, T> {
         Self {
             expect: Box::new(|s| s.chars().all(|c| c.is_alphabetic() || c == '_')),
             target,
             acc: String::new(),
             pos: None,
+            _lifetime: PhantomData,
         }
         .boxed()
     }
@@ -368,13 +374,13 @@ where
     }
 }
 
-impl<T, F2> Parser for IdentifierTokenizer<T, F2>
+impl<'a, T, F2> Parser for IdentifierTokenizer<'a, T, F2>
 where
     F2: Fn(String) -> T + 'static,
     T: 'static,
 {
     type Expression = Option<Annotated<T>>;
-    type Token = String;
+    type Token = &'a str;
 
     fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
         let token_matches = (self.expect)(&token.token);
@@ -460,7 +466,7 @@ impl TryFrom<&'_ str> for NumericElement {
     }
 }
 
-struct SimplisticNumericTokenizer<F, T>
+struct SimplisticNumericTokenizer<'a, F, T>
 where
     F: Fn(Numeric64) -> T,
 {
@@ -469,20 +475,22 @@ where
     pre: Option<u32>,
     post: Option<u32>,
     pos: Option<(usize, usize)>,
+    _lifetime: PhantomData<&'a T>
 }
 
-impl<F, T> SimplisticNumericTokenizer<F, T>
+impl<'a, F, T> SimplisticNumericTokenizer<'a, F, T>
 where
     F: Fn(Numeric64) -> T + 'static,
     T: 'static,
 {
-    fn new(target: F) -> StrTokenizer<T> {
+    fn new(target: F) -> StrTokenizer<'a, T> {
         Self {
             target,
             neg: false,
             pre: None,
             post: None,
             pos: None,
+            _lifetime: PhantomData
         }
         .boxed()
     }
@@ -517,16 +525,16 @@ where
     }
 }
 
-impl<F, T> Parser for SimplisticNumericTokenizer<F, T>
+impl<'a, F, T> Parser for SimplisticNumericTokenizer<'a, F, T>
 where
     F: Fn(Numeric64) -> T + 'static,
     T: 'static,
 {
     type Expression = Option<Annotated<T>>;
-    type Token = String;
+    type Token = &'a str;
 
     fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
-        match NumericElement::try_from(token.token.as_str()) {
+        match NumericElement::try_from(token.token.as_ref()) {
             Ok(_) => PeekResult::WouldAccept,
             Err(e) => PeekResult::WouldFail(e),
         }
@@ -541,11 +549,11 @@ where
             self.pos = Some((token.row, token.col));
         }
 
-        let el = match NumericElement::try_from(token.token.as_str()) {
+        let el = match NumericElement::try_from(token.token.as_ref()) {
             Ok(el) => el,
             Err(e) => return self.fail_token(&e, token),
         };
-        let next_token = next_token.and_then(|t| NumericElement::try_from(t.token.as_str()).ok());
+        let next_token = next_token.and_then(|t| NumericElement::try_from(t.token.as_ref()).ok());
         match (el, next_token, self.pre, self.post) {
             (NumericElement::Dot, _, Some(_), None) => {
                 self.post = Some(0);
@@ -597,9 +605,9 @@ mod tests {
     use super::*;
     use crate::toy::{toy_tokenizer, Token};
 
-    fn make_line(t: &str) -> impl Iterator<Item = Annotated<String>> + '_ {
+    fn make_line(t: &str) -> impl Iterator<Item = Annotated<&'_ str>> + '_ {
         t.grapheme_indices(true).map(|(i, s)| Annotated {
-            token: s.to_owned(),
+            token: s,
             row: 1,
             col: i + 1,
         })

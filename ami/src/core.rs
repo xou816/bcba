@@ -174,9 +174,9 @@ pub trait Parser {
         }
     }
 
-    fn boxed(self) -> Box<dyn Parser<Expression = Self::Expression, Token = Self::Token>>
+    fn boxed<'a>(self) -> Box<dyn Parser<Expression = Self::Expression, Token = Self::Token> + 'a>
     where
-        Self: Sized + 'static,
+        Self: 'a + Sized,
     {
         Box::new(self)
     }
@@ -252,9 +252,9 @@ where
     }
 }
 
-pub type BoxedParser<T, E> = Box<dyn Parser<Token = T, Expression = E>>;
+pub type BoxedParser<'a, T, E> = Box<dyn Parser<Token = T, Expression = E> + 'a>;
 
-impl<T: Display, E> Parser for BoxedParser<T, E> {
+impl<T: Display, E> Parser for BoxedParser<'static, T, E> {
     type Expression = E;
     type Token = T;
 

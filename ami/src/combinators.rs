@@ -23,7 +23,7 @@ pub mod parsers {
         }
     }
 
-    pub fn one_of<T, E>(parsers: impl IntoIterator<Item = BoxedParser<T, E>>) -> OneOfParser<T, E> {
+    pub fn one_of<'a, T, E>(parsers: impl IntoIterator<Item = BoxedParser<'a, T, E>>) -> OneOfParser<'a, T, E> {
         OneOfParser(
             parsers
                 .into_iter()
@@ -255,14 +255,14 @@ impl<T: Display, E> Parser for CompletingParser<T, E> {
     }
 }
 
-pub struct CandidateParser<T, E> {
+pub struct CandidateParser<'a, T, E> {
     is_candidate: bool,
-    parser: BoxedParser<T, E>,
+    parser: BoxedParser<'a, T, E>,
 }
-pub struct OneOfParser<T, E>(Vec<CandidateParser<T, E>>);
+pub struct OneOfParser<'a, T, E>(Vec<CandidateParser<'a, T, E>>);
 
-impl<T, E> OneOfParser<T, E> {
-    pub fn new(parsers: Vec<BoxedParser<T, E>>) -> Self {
+impl<'a, T, E> OneOfParser<'a, T, E> {
+    pub fn new(parsers: Vec<BoxedParser<'a, T, E>>) -> Self {
         Self(
             parsers
                 .into_iter()
@@ -275,7 +275,7 @@ impl<T, E> OneOfParser<T, E> {
     }
 }
 
-impl<T, E> Parser for OneOfParser<T, E>
+impl<'a, T, E> Parser for OneOfParser<'a, T, E>
 where
     T: Display + Clone,
 {
@@ -286,7 +286,7 @@ where
         self.0.iter().filter(|p| p.is_candidate).fold(
             PeekResult::WouldFail("No expression matched".to_string()),
             |res, p| match res {
-                PeekResult::WouldFail(_) => p.parser.peek(token),
+                PeekResult::WouldFail(_) => p.parser.as_ref().peek(token),
                 s => s,
             },
         )
@@ -302,7 +302,7 @@ where
             |res, p| match res {
                 // Candidate not found
                 ParseResult::Failed(_, failed_token) => {
-                    let result = p.parser.parse(failed_token, next_token);
+                    let result = p.parser.as_mut().parse(failed_token, next_token);
                     if !matches!(result, ParseResult::Accepted(_)) {
                         p.is_candidate = false;
                     }
@@ -324,7 +324,7 @@ where
     fn reset(&mut self) {
         self.0.iter_mut().for_each(|it| {
             it.is_candidate = true;
-            it.parser.reset();
+            it.parser.as_mut().reset();
         });
     }
 }

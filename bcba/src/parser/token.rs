@@ -49,7 +49,7 @@ impl PartialEq for Token {
 
 impl Eq for Token {}
 
-pub fn tokenizer() -> TokenizerV3<Token> {
+pub fn tokenizer<'a>() -> TokenizerV3<'a, Token> {
     TokenizerV3::new(vec![
         keyword("everyone", Token::KeywordEveryone),
         keyword("but", Token::KeywordBut),
