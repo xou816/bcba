@@ -500,21 +500,6 @@ mod tests {
     use super::*;
     use crate::{parsers::list_of, toy::Token};
 
-    #[derive(Debug, PartialEq, Eq)]
-    struct FooResult(String);
-    enum FooInput {
-        T(Token),
-        S(String),
-    }
-
-    impl TryFrom<Token> for FooInput {
-        type Error = ();
-
-        fn try_from(value: Token) -> Result<Self, Self::Error> {
-            Ok(Self::T(value))
-        }
-    }
-
     fn make_line(t: impl IntoIterator<Item = Token>) -> impl Iterator<Item = Annotated<Token>> {
         t.into_iter().enumerate().map(|(i, t)| t.at(1, i + 1))
     }

@@ -173,7 +173,7 @@ fn main() {
     let fun = true
     let message = "lets party!"
     if polite {
-        print("i am polite!"
+        print("i am polite!")
         if fun {
             print(message)
         }
