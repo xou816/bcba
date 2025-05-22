@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use ami::{token::TokenizerV3, tokenizers::*};
+use ami::{token::Tokenizer, tokenizers::*};
 
 #[derive(Debug, Clone)]
 pub enum Token {
@@ -49,8 +49,8 @@ impl PartialEq for Token {
 
 impl Eq for Token {}
 
-pub fn tokenizer<'a>() -> TokenizerV3<'a, Token> {
-    TokenizerV3::new(vec![
+pub fn tokenizer<'a>() -> Tokenizer<'a, Token> {
+    Tokenizer::new(vec![
         keyword("everyone", Token::KeywordEveryone),
         keyword("but", Token::KeywordBut),
         keyword("paid", Token::KeywordPaid),

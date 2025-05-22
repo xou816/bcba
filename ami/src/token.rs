@@ -24,7 +24,10 @@ impl<T: Display> Annotated<T> {
 pub mod tokenizers {
     use super::*;
 
-    pub fn keyword<'a, T: Clone + 'static>(keyword: &'static str, target: T) -> StrTokenizer<'a, T> {
+    pub fn keyword<'a, T: Clone + 'static>(
+        keyword: &'static str,
+        target: T,
+    ) -> StrTokenizer<'a, T> {
         KeywordTokenizer::new(keyword, target)
     }
 
@@ -32,7 +35,11 @@ pub mod tokenizers {
         WhitespaceTokenizer::new()
     }
 
-    pub fn delimited<'a, F, T>(left: &'static str, right: &'static str, target: F) -> StrTokenizer<'a, T>
+    pub fn delimited<'a, F, T>(
+        left: &'static str,
+        right: &'static str,
+        target: F,
+    ) -> StrTokenizer<'a, T>
     where
         F: Fn(String) -> T,
         T: 'static,
@@ -58,15 +65,16 @@ pub mod tokenizers {
     }
 }
 
-type StrTokenizer<'a, T> = BoxedParser<'a, &'a str, Option<Annotated<T>>>;
+/// Tokenizes a borrowed string to a single token T or None
+type StrTokenizer<'a, Token> = BoxedParser<'a, &'a str, Option<Annotated<Token>>>;
 
-pub struct TokenizerV3<'a, Token> {
+pub struct Tokenizer<'a, Token> {
     rules: OneOfParser<'a, &'a str, Option<Annotated<Token>>>,
     col: usize,
     row: usize,
 }
 
-impl<'a, Token: 'static> TokenizerV3<'a, Token> {
+impl<'a, Token: 'static> Tokenizer<'a, Token> {
     pub fn new(rules: Vec<StrTokenizer<'a, Token>>) -> Self {
         Self {
             rules: OneOfParser::new(rules),
@@ -153,7 +161,7 @@ struct KeywordTokenizer<'a, T> {
     keyword: Vec<String>,
     target: T,
     pos: Option<(usize, usize)>,
-    _lifetime: PhantomData<&'a T>
+    _lifetime: PhantomData<&'a T>,
 }
 
 impl<'a, T> KeywordTokenizer<'a, T>
@@ -166,7 +174,7 @@ where
             keyword: keyword.graphemes(true).map(|s| s.to_owned()).collect(),
             target,
             pos: None,
-            _lifetime: PhantomData
+            _lifetime: PhantomData,
         }
         .boxed()
     }
@@ -176,7 +184,10 @@ where
             return false;
         }
 
-        self.keyword.get(i).map(|i| i == &token.token).unwrap_or_default()
+        self.keyword
+            .get(i)
+            .map(|i| i == &token.token)
+            .unwrap_or_default()
     }
 
     fn is_last(&self) -> bool {
@@ -250,7 +261,7 @@ where
     target: F,
     acc: String,
     pos: Option<(usize, usize)>,
-    _lifetime: PhantomData<&'a T>
+    _lifetime: PhantomData<&'a T>,
 }
 
 impl<'a, T, F> DelimitedTokenizer<'a, T, F>
@@ -345,7 +356,7 @@ where
     target: F2,
     acc: String,
     pos: Option<(usize, usize)>,
-    _lifetime: PhantomData<&'a T>
+    _lifetime: PhantomData<&'a T>,
 }
 
 impl<'a, T, F2> IdentifierTokenizer<'a, T, F2>
@@ -473,9 +484,10 @@ where
     target: F,
     neg: bool,
     pre: Option<u32>,
-    post: Option<u32>,
+    post: Option<f64>,
+    post_exponent: f64,
     pos: Option<(usize, usize)>,
-    _lifetime: PhantomData<&'a T>
+    _lifetime: PhantomData<&'a T>,
 }
 
 impl<'a, F, T> SimplisticNumericTokenizer<'a, F, T>
@@ -489,8 +501,9 @@ where
             neg: false,
             pre: None,
             post: None,
+            post_exponent: 1.0,
             pos: None,
-            _lifetime: PhantomData
+            _lifetime: PhantomData,
         }
         .boxed()
     }
@@ -510,10 +523,8 @@ where
             }
             (Some(pre), Some(post)) => {
                 let pre: f64 = pre.into();
-                let post: f64 = post.into();
-                let exp = (post.log10()).floor() as i32;
                 let neg = if self.neg { -1f64 } else { 1f64 };
-                let numeric = Numeric64::Float(neg * (pre + post * 10f64.powi(-exp - 1)));
+                let numeric = Numeric64::Float(neg * (pre + post));
                 Annotated {
                     token: (self.target)(numeric),
                     row,
@@ -534,7 +545,7 @@ where
     type Token = &'a str;
 
     fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
-        match NumericElement::try_from(token.token.as_ref()) {
+        match NumericElement::try_from(token.token) {
             Ok(_) => PeekResult::WouldAccept,
             Err(e) => PeekResult::WouldFail(e),
         }
@@ -549,28 +560,16 @@ where
             self.pos = Some((token.row, token.col));
         }
 
-        let el = match NumericElement::try_from(token.token.as_ref()) {
+        let el = match NumericElement::try_from(token.token) {
             Ok(el) => el,
             Err(e) => return self.fail_token(&e, token),
         };
-        let next_token = next_token.and_then(|t| NumericElement::try_from(t.token.as_ref()).ok());
+        let next_token = next_token.and_then(|t| NumericElement::try_from(t.token).ok());
         match (el, next_token, self.pre, self.post) {
-            (NumericElement::Dot, _, Some(_), None) => {
-                self.post = Some(0);
-                ParseResult::Accepted(None)
-            }
             (NumericElement::MinusSign, Some(NumericElement::Digit(_)), None, None) => {
                 self.neg = true;
                 self.pre = Some(0);
                 ParseResult::Accepted(None)
-            }
-            (NumericElement::Digit(d), Some(NumericElement::Digit(_)), Some(_), Some(post)) => {
-                self.post = Some(post * 10 + d);
-                ParseResult::Accepted(None)
-            }
-            (NumericElement::Digit(d), None, Some(_), Some(post)) => {
-                self.post = Some(post * 10 + d);
-                ParseResult::Complete(Some(self.make()), None)
             }
             (
                 NumericElement::Digit(d),
@@ -581,12 +580,24 @@ where
                 self.pre = Some(self.pre.unwrap_or_default() * 10 + d);
                 ParseResult::Accepted(None)
             }
-            (
-                NumericElement::Digit(_),
-                None,
-                _,
-                None,
-            ) => ParseResult::Complete(Some(self.make()), None),
+            (NumericElement::Digit(d), None, _, None) => {
+                self.pre = Some(self.pre.unwrap_or_default() * 10 + d);
+                ParseResult::Complete(Some(self.make()), None)
+            }
+            (NumericElement::Dot, _, Some(_), None) => {
+                self.post = Some(0.0);
+                ParseResult::Accepted(None)
+            }
+            (NumericElement::Digit(d), Some(NumericElement::Digit(_)), Some(_), Some(post)) => {
+                self.post_exponent *= 0.1;
+                self.post = Some(post + (d as f64) * self.post_exponent);
+                ParseResult::Accepted(None)
+            }
+            (NumericElement::Digit(d), None, Some(_), Some(post)) => {
+                self.post_exponent *= 0.1;
+                self.post = Some(post + (d as f64) * self.post_exponent);
+                ParseResult::Complete(Some(self.make()), None)
+            }
 
             _ => self.fail_token("Unexpected numeric value", token),
         }
@@ -597,6 +608,7 @@ where
         self.neg = false;
         self.pre = None;
         self.post = None;
+        self.post_exponent = 1.0;
     }
 }
 
@@ -614,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn test_v3() {
+    fn test_tokenizer() {
         let tokens: Vec<Annotated<Token>> = toy_tokenizer()
             .tokenize("if true {\nprint(\"hellô  world\")\n}")
             .collect();
@@ -639,6 +651,30 @@ mod tests {
 
         let mut tokens = make_line("-12.989");
         let res = tokenizer.run_to_completion(&mut tokens);
-        assert_eq!(res, Ok(Some(Token::LitNum(Numeric64::Float(-12.989)).at(1, 1))))
+        assert_eq!(
+            res,
+            Ok(Some(Token::LitNum(Numeric64::Float(-12.9890)).at(1, 1)))
+        )
+    }
+
+    #[test]
+    fn test_numeric2() {
+        let mut tokenizer = SimplisticNumericTokenizer::new(Token::LitNum);
+
+        let mut tokens = make_line("1.01");
+        let res = tokenizer.run_to_completion(&mut tokens);
+        assert_eq!(
+            res,
+            Ok(Some(Token::LitNum(Numeric64::Float(1.01)).at(1, 1)))
+        )
+    }
+
+    #[test]
+    fn test_numeric3() {
+        let mut tokenizer = SimplisticNumericTokenizer::new(Token::LitNum);
+
+        let mut tokens = make_line("123");
+        let res = tokenizer.run_to_completion(&mut tokens);
+        assert_eq!(res, Ok(Some(Token::LitNum(Numeric64::Int(123)).at(1, 1))))
     }
 }

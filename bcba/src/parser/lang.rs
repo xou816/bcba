@@ -160,10 +160,10 @@ mod tests {
     fn test_ledger_entry() {
         let mut parser = LedgerEntry::parser();
         let mut tokens =
-            tokenizer().tokenize("- @Foo paid $3.99 for everyone but @Bar (no reason)\n");
+            tokenizer().tokenize("- @Foo paid $30 for everyone but @Bar (no reason)\n");
         let res = parser.run_to_completion(&mut tokens);
         dbg!(&res);
-        assert!(matches!(res, Ok(LedgerEntry(_, _, Debtor::EveryoneBut(_)))));
+        assert!(matches!(res, Ok(LedgerEntry(_, Amount(30.0), Debtor::EveryoneBut(_)))));
     }
 
     #[test]

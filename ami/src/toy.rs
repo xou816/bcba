@@ -1,6 +1,6 @@
 use std::fmt::{Display};
 
-use crate::{token::{Annotated, Numeric64, TokenizerV3}, tokenizers::*};
+use crate::{token::{Annotated, Numeric64, Tokenizer}, tokenizers::*};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -78,8 +78,8 @@ impl Display for Token {
 
 impl Eq for Token {}
 
-pub fn toy_tokenizer<'a>() -> TokenizerV3<'a, Token> {
-    TokenizerV3::new(vec![
+pub fn toy_tokenizer<'a>() -> Tokenizer<'a, Token> {
+    Tokenizer::new(vec![
         keyword("if", Token::If),
         keyword("true", Token::True),
         keyword("false", Token::False),
