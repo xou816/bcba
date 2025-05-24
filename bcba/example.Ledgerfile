@@ -1,6 +1,8 @@
-@Foo
-@Bar
-@Baz
+persons:
+- @Foo
+- @Bar
+- @Baz
 
+transactions:
 - @Foo paid $50 for everyone (because he felt generous)
 - @Bar paid $20 for everyone but @Foo (because he hates Foo's guts)

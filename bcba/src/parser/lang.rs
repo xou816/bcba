@@ -14,21 +14,28 @@ impl LedgerParser {
         tokens: &mut dyn Iterator<Item = Annotated<Token>>,
     ) -> Result<Vec<Expression>, String> {
         let mut parser = one_of([
-            LedgerEntry::parser().map(Expression::LedgerEntry).boxed(),
-            Person::parser()
-                .then(just!(Token::LineEnd))
-                .map(|(p, _)| Expression::PersonDeclaration(p))
+            LedgerSection::parser()
+                .map(Expression::LedgerSection)
+                .tag("ledger")
                 .boxed(),
-            just!(Token::LineEnd).map(|_| Expression::None).boxed(),
-        ]);
+            PersonSection::parser()
+                .map(Expression::PersonSection)
+                .tag("persons")
+                .boxed(),
+            just!(Token::LineEnd)
+                .map(|_| Expression::None)
+                .tag("none")
+                .boxed(),
+        ])
+        .tag("main");
         parser.run_to_exhaustion(tokens).map_err(|e| e.message)
     }
 }
 
 #[derive(Debug)]
 pub enum Expression {
-    PersonDeclaration(Person),
-    LedgerEntry(LedgerEntry),
+    PersonSection(PersonSection),
+    LedgerSection(LedgerSection),
     None,
 }
 
@@ -104,21 +111,49 @@ impl Debtor {
 }
 
 #[derive(Debug)]
+pub struct LedgerSection(pub Vec<LedgerEntry>);
+
+impl LedgerSection {
+    fn parser() -> impl Parser<Token = Token, Expression = Self> {
+        just!(Token::Word(_s) if _s == "transactions")
+            .then(just!(Token::SectionMarker))
+            .then(just!(Token::LineEnd))
+            .then(list_of(Token::LineEnd, LedgerEntry::parser()))
+            .map(|unwind!(entries, _, _, _)| Self(entries))
+    }
+}
+
+#[derive(Debug)]
 pub struct LedgerEntry(pub Person, pub Amount, pub Debtor);
 
 impl LedgerEntry {
     fn parser() -> impl Parser<Token = Token, Expression = LedgerEntry> {
-        just!(Token::LedgerEntryStart)
+        just!(Token::ListItem)
             .then(Person::parser())
             .then(just!(Token::KeywordPaid))
             .then(Amount::parser())
             .then(just!(Token::KeywordFor))
             .then(Debtor::parser())
             .then(just!(Token::Comment))
+            .map(|unwind!(_, debtor, _, amount, _, person, _)| LedgerEntry(person, amount, debtor))
+    }
+}
+
+#[derive(Debug)]
+pub struct PersonSection(pub Vec<Person>);
+
+impl PersonSection {
+    fn parser() -> impl Parser<Token = Token, Expression = Self> {
+        just!(Token::Word(_s) if _s == "persons")
+            .then(just!(Token::SectionMarker))
             .then(just!(Token::LineEnd))
-            .map(|unwind!(_, _, debtor, _, amount, _, person, _)| {
-                LedgerEntry(person, amount, debtor)
-            })
+            .then(list_of(
+                Token::LineEnd,
+                just!(Token::ListItem)
+                    .then(Person::parser())
+                    .map(|unwind!(p, _)| p),
+            ))
+            .map(|unwind!(persons, _, _, _)| PersonSection(persons))
     }
 }
 
@@ -163,7 +198,10 @@ mod tests {
             tokenizer().tokenize("- @Foo paid $30 for everyone but @Bar (no reason)\n");
         let res = parser.run_to_completion(&mut tokens);
         dbg!(&res);
-        assert!(matches!(res, Ok(LedgerEntry(_, Amount(30.0), Debtor::EveryoneBut(_)))));
+        assert!(matches!(
+            res,
+            Ok(LedgerEntry(_, Amount(30.0), Debtor::EveryoneBut(_)))
+        ));
     }
 
     #[test]

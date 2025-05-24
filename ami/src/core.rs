@@ -92,7 +92,7 @@ pub trait Parser {
         let mut next_token: Option<Annotated<Self::Token>> = None;
         let mut acc: Vec<Self::Expression> = vec![];
         loop {
-            next_token = next_token.or(tokens.next());
+            next_token = next_token.or_else(|| tokens.next());
             let Some(token) = next_token.take() else {
                 break Ok(acc);
             };
@@ -120,9 +120,13 @@ pub trait Parser {
 
     fn reset(&mut self);
 
-    fn complete(&mut self, r: Self::Expression) -> ParseResult<Self::Token, Self::Expression> {
+    fn complete(
+        &mut self,
+        r: Self::Expression,
+        t: Option<Annotated<Self::Token>>,
+    ) -> ParseResult<Self::Token, Self::Expression> {
         self.reset();
-        ParseResult::Complete(r, None)
+        ParseResult::Complete(r, t)
     }
 
     fn fail(
@@ -160,6 +164,13 @@ pub trait Parser {
         Self: Sized,
     {
         MapParser(self, Box::new(f))
+    }
+
+    fn tag(self, tag: &str) -> MapErrParser<Self>
+    where
+        Self: Sized,
+    {
+        MapErrParser(self, format!("Parsing {tag}"))
     }
 
     fn then<P: Parser>(self, p: P) -> ThenParser<Self, P>
@@ -297,11 +308,43 @@ where
     ) -> ParseResult<Self::Token, Self::Expression> {
         match self.0.parse(token, next_token) {
             ParseResult::Complete(r, t) => match self.1(r) {
-                Ok(r) => self.complete(r),
+                Ok(r) => self.complete(r, t),
                 Err(msg) => self.fail_token(&msg, t.expect("Fix this!")),
             },
             ParseResult::Accepted(t) => ParseResult::Accepted(t),
             ParseResult::Failed(e, t) => self.fail(e, t),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.0.reset();
+    }
+}
+
+pub struct MapErrParser<P>(P, String)
+where
+    P: Parser + Sized;
+
+impl<P> Parser for MapErrParser<P>
+where
+    P: Parser + Sized,
+{
+    type Expression = P::Expression;
+    type Token = P::Token;
+
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
+        self.0.peek(token)
+    }
+
+    fn parse(
+        &mut self,
+        token: Annotated<Self::Token>,
+        next_token: Option<&Annotated<Self::Token>>,
+    ) -> ParseResult<Self::Token, Self::Expression> {
+        match self.0.parse(token, next_token) {
+            ParseResult::Complete(r, t) => self.complete(r, t),
+            ParseResult::Accepted(t) => ParseResult::Accepted(t),
+            ParseResult::Failed(e, t) => self.fail(format!("{}: {e}", self.1), t),
         }
     }
 

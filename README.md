@@ -7,14 +7,16 @@ Balance expenses between people using a plain text file. Version that file, mayb
 Start by listing involved people in a file named `Ledgerfile`.
 
 ```
-@Foo
-@Bar
-@Baz
+persons:
+- @Foo
+- @Bar
+- @Baz
 ```
 
 Then list expenses.
 
 ```
+transactions:
 - @Foo paid $50 for everyone (because he felt generous)
 - @Bar paid $20 for everyone but @Foo (because he hates Foo's guts)
 ```
@@ -27,16 +29,26 @@ Run the program. It will list the required payments to balance expenses among Fo
 
 Profit.
 
-## Parser
+# ami, the friendly parser
 
-This project is just an excuse to build a basic parser library.
+This project is just an excuse to build a basic parser library. See the included example or `bcba` for usage samples. 
 
-As for the actual ledger parser, it's got some quirks at the moment:
-- files must end with a new line (`\n`);
-- it does not handle UTF-8 graphemes properly or at all, stick to ASCII for now;
-- `(comments like this)` are not optional;
-- it `panics!` quite liberally (but is working on anxiety management).
+Here is for instance the parser for a single ledger entry in `bcba`:
 
-## Future
+```rust
+just!(Token::ListItem)
+    .then(Person::parser())
+    .then(just!(Token::KeywordPaid))
+    .then(Amount::parser())
+    .then(just!(Token::KeywordFor))
+    .then(Debtor::parser())
+    .then(just!(Token::Comment))
+    .map(|unwind!(_, debtor, _, amount, _, person, _)| LedgerEntry(person, amount, debtor))
+```
 
-It's just for fun. But multiple currencies would be nice, I guess.
+Breakdown of interesting things:
+- (not pictured here) a plain enum defines all our tokens
+- the `just!` macro turns a token in a parser that parses that specific token
+- parsers are combined with operators just as `then`, `map`, or other **combinators** (these are WIP and subject to change, a lot)
+- in this example, other parsers are referenced (e.g. `Person::parser()`)
+- map is a bit wonky, therefore an `unwind!` macro is used to unwrap (in reverse order!) the elements parsed by each of the chained parsers: first, a comment (ignored), then a debtor, etc... 

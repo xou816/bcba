@@ -23,7 +23,9 @@ pub mod parsers {
         }
     }
 
-    pub fn one_of<'a, T, E>(parsers: impl IntoIterator<Item = BoxedParser<'a, T, E>>) -> OneOfParser<'a, T, E> {
+    pub fn one_of<'a, T, E>(
+        parsers: impl IntoIterator<Item = BoxedParser<'a, T, E>>,
+    ) -> OneOfParser<'a, T, E> {
         OneOfParser(
             parsers
                 .into_iter()
@@ -66,7 +68,19 @@ pub mod parsers {
         RepeatUntil {
             parser,
             busy: false,
-            end,
+            end: Some(end),
+            acc: vec![],
+        }
+    }
+
+    pub fn repeat<P>(parser: P) -> RepeatUntil<P>
+    where
+        P: Parser,
+    {
+        RepeatUntil {
+            parser,
+            busy: false,
+            end: None,
             acc: vec![],
         }
     }
@@ -226,7 +240,7 @@ impl<T: Display, E> Parser for SingleParser<T, E> {
     ) -> ParseResult<Self::Token, Self::Expression> {
         let map_match = &self.map_match;
         match map_match(token) {
-            Ok(r) => self.complete(r),
+            Ok(r) => self.complete(r, None),
             Err(t) => self.fail_token("Failed to parse single token", t),
         }
     }
@@ -332,7 +346,7 @@ where
 pub struct RepeatUntil<P: Parser> {
     parser: P,
     busy: bool,
-    end: P::Token,
+    end: Option<P::Token>,
     acc: Vec<P::Expression>,
 }
 
@@ -356,7 +370,9 @@ where
         token: Annotated<Self::Token>,
         next_token: Option<&Annotated<Self::Token>>,
     ) -> ParseResult<Self::Token, Self::Expression> {
-        let next_is_end = next_token.map(|t| t.token == self.end).unwrap_or(false);
+        let next_is_end = next_token
+            .and_then(|t| self.end.as_ref().map(|e| e == &t.token))
+            .unwrap_or(false);
         match self.parser.parse(token, next_token) {
             ParseResult::Accepted(t) => {
                 self.busy = true;
@@ -373,7 +389,11 @@ where
                 self.acc.push(e);
                 ParseResult::Accepted(t)
             }
-            ParseResult::Failed(e, t) => ParseResult::Failed(e, t),
+            ParseResult::Failed(_, t) => {
+                let r = ParseResult::Complete(self.acc.drain(..).collect(), Some(t));
+                self.reset();
+                r
+            }
         }
     }
 
@@ -389,6 +409,7 @@ where
 {
     separator: P::Token,
     item_parser: P,
+    parsing_item: bool,
     acc: Vec<P::Expression>,
 }
 
@@ -400,6 +421,7 @@ where
         Self {
             separator,
             item_parser,
+            parsing_item: false,
             acc: vec![],
         }
     }
@@ -438,8 +460,12 @@ where
             (true, true) => ParseResult::Complete(self.acc.drain(..).collect(), None),
             (true, false) => ParseResult::Accepted(None),
             (false, _) => match self.item_parser.parse(token, next_token) {
-                ParseResult::Accepted(t) => ParseResult::Accepted(t),
+                ParseResult::Accepted(t) => {
+                    self.parsing_item = true;
+                    ParseResult::Accepted(t)
+                }
                 ParseResult::Complete(item, t) => {
+                    self.parsing_item = false;
                     self.acc.push(item);
                     if next_is_end || next_is_not_separator {
                         ParseResult::Complete(self.acc.drain(..).collect(), t)
@@ -447,8 +473,8 @@ where
                         ParseResult::Accepted(t)
                     }
                 }
-                ParseResult::Failed(_, t) if self.acc.is_empty() => {
-                    ParseResult::Complete(vec![], Some(t))
+                ParseResult::Failed(_, t) if !self.parsing_item => {
+                    ParseResult::Complete(self.acc.drain(..).collect(), Some(t))
                 }
                 ParseResult::Failed(_, t) => self.fail_token("Expected list element", t),
             },
@@ -457,6 +483,7 @@ where
 
     fn reset(&mut self) {
         self.acc = vec![];
+        self.parsing_item = false;
     }
 }
 
@@ -573,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_parser_error() {
+    fn test_list_parser_trailing() {
         let var_parser = just!(Token::Identifier(_w) => _w);
         let mut parser = just!(Token::ParenOpen)
             .then(list_of(Token::Comma, var_parser))
@@ -588,10 +615,12 @@ mod tests {
         ]);
 
         let res = parser.run_to_completion(&mut tokens);
-        assert_eq!(
-            res.map_err(|err| err.message),
-            Err("Expected list element: unexpected closing parenthesis `)` at ln 1, col 4".to_string())
-        );
+        assert!(dbg!(&res).is_ok());
+        assert_eq!(res.unwrap(), vec!["a".to_string()]);
+        // assert_eq!(
+        //     res.map_err(|err| err.message),
+        //     Err("Expected list element: unexpected closing parenthesis `)` at ln 1, col 4".to_string())
+        // );
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 mod parser;
-use parser::{tokenizer, Amount, Expression, LedgerEntry, LedgerParser, Person};
+use parser::{tokenizer, Amount, Expression, LedgerSection, LedgerEntry, LedgerParser, Person, PersonSection};
 
 #[derive(Parser)]
 #[command(version)]
@@ -23,14 +23,18 @@ fn main() -> Result<(), String> {
         .into_iter()
         .fold(Ledger::default(), |mut ledger, ex| {
             match ex {
-                Expression::PersonDeclaration(p) => {
-                    ledger.add_person(p);
+                Expression::PersonSection(PersonSection(persons)) => {
+                    for p in persons {
+                        ledger.add_person(p);
+                    }
                 }
-                Expression::LedgerEntry(LedgerEntry(creditor, amount, debtor_list)) => {
-                    let all_debtors = debtor_list.list_persons_given(&ledger.everyone);
-                    let div = all_debtors.len() as f64;
-                    for debtor in all_debtors {
-                        ledger.add_expense(creditor.clone(), amount.get() / div, debtor.clone());
+                Expression::LedgerSection(LedgerSection(entries)) => {
+                    for LedgerEntry(creditor, amount, debtor_list) in entries {
+                        let all_debtors = debtor_list.list_persons_given(&ledger.everyone);
+                        let div = all_debtors.len() as f64;
+                        for debtor in all_debtors {
+                            ledger.add_expense(creditor.clone(), amount.get() / div, debtor.clone());
+                        }
                     }
                 }
                 _ => {}

@@ -5,7 +5,7 @@ use ami::{token::Tokenizer, tokenizers::*};
 #[derive(Debug, Clone)]
 pub enum Token {
     NameAnchor,
-    LedgerEntryStart,
+    ListItem,
     DollarSymbol,
     Comment,
     KeywordPaid,
@@ -14,6 +14,7 @@ pub enum Token {
     KeywordBut,
     LineEnd,
     Comma,
+    SectionMarker,
     Word(String),
     Price(f64),
 }
@@ -21,7 +22,7 @@ pub enum Token {
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Token::LedgerEntryStart => write!(f, "start of ledger"),
+            Token::ListItem => write!(f, "list item"),
             Token::KeywordPaid => write!(f, "keyword `paid`"),
             Token::NameAnchor => write!(f, "name anchor `@`"),
             Token::Word(w) => write!(f, "token `{}`", w),
@@ -30,6 +31,7 @@ impl Display for Token {
             Token::KeywordFor => write!(f, "keyword `for`"),
             Token::LineEnd => write!(f, "end of line"),
             Token::Comma => write!(f, "comma"),
+            Token::SectionMarker => write!(f, "section marker"),
             Token::KeywordEveryone => write!(f, "keyword `everyone`"),
             Token::KeywordBut => write!(f, "keyword `but`"),
             Token::Price(_) => write!(f, "numeric value"),
@@ -56,10 +58,11 @@ pub fn tokenizer<'a>() -> Tokenizer<'a, Token> {
         keyword("paid", Token::KeywordPaid),
         keyword("for", Token::KeywordFor),
         keyword("@", Token::NameAnchor),
-        keyword("-", Token::LedgerEntryStart),
+        keyword("-", Token::ListItem),
         keyword("$", Token::DollarSymbol),
         keyword("\n", Token::LineEnd),
         keyword(",", Token::Comma),
+        keyword(":", Token::SectionMarker),
         delimited("(", ")", |_| Token::Comment),
         identifier(Token::Word),
         numeric(|n| match n {

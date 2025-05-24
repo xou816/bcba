@@ -236,7 +236,7 @@ where
             .unwrap_or(false);
         let is_last = self.is_last();
         match (matches, next_matches, is_last) {
-            (true, _, true) => self.complete(Some(self.make())),
+            (true, _, true) => self.complete(Some(self.make()), None),
             (true, true, _) => {
                 self.i += 1;
                 ParseResult::Accepted(None)
@@ -336,7 +336,7 @@ where
                 ParseResult::Accepted(None)
             } else {
                 let t = self.make();
-                self.complete(Some(t))
+                self.complete(Some(t), None)
             }
         }
     }
@@ -422,7 +422,7 @@ where
             (true, false) => {
                 self.acc.push_str(&token.token);
                 let t = self.make();
-                self.complete(Some(t))
+                self.complete(Some(t), None)
             }
             (false, _) => self.fail_token("Unexpected identifier", token),
         }
