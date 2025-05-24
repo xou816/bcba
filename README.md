@@ -36,13 +36,13 @@ This project is just an excuse to build a basic parser library. See the included
 Here is for instance the parser for a single ledger entry in `bcba`:
 
 ```rust
-just!(Token::ListItem)
-    .then(Person::parser())
-    .then(just!(Token::KeywordPaid))
-    .then(Amount::parser())
-    .then(just!(Token::KeywordFor))
-    .then(Debtor::parser())
-    .then(just!(Token::Comment))
+just!(Token::ListItem)                  // -
+    .then(Person::parser())             // @Foo
+    .then(just!(Token::KeywordPaid))    // paid
+    .then(Amount::parser())             // $50
+    .then(just!(Token::KeywordFor))     // for
+    .then(Debtor::parser())             // everyone
+    .then(just!(Token::Comment))        // (because he felt generous)
     .map(|unwind!(_, debtor, _, amount, _, person, _)| LedgerEntry(person, amount, debtor))
 ```
 
