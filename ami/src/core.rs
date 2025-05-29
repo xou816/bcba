@@ -203,6 +203,22 @@ where
     next: B,
 }
 
+impl<A, B> ThenParser<A, B>
+where
+    A: Parser,
+    B: Parser<Token = A::Token>,
+{
+    /// Keep only the last Token as the resulting Expression
+    pub fn tail(self) -> MapParser<Self, B::Expression> {
+        MapParser(self, Box::new(|(_, b)| Ok(b)))
+    }
+    
+    /// Removes latest parsed Token from Expression
+    pub fn pop(self) -> MapParser<Self, A::Expression> {
+        MapParser(self, Box::new(|(a, _)| Ok(a)))
+    }
+}
+
 impl<A, B> Parser for ThenParser<A, B>
 where
     A: Parser,

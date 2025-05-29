@@ -129,13 +129,13 @@ pub struct LedgerEntry(pub Person, pub Amount, pub Debtor);
 impl LedgerEntry {
     fn parser() -> impl Parser<Token = Token, Expression = LedgerEntry> {
         just!(Token::ListItem)
-            .then(Person::parser())
-            .then(just!(Token::KeywordPaid))
+            .then(Person::parser()).tail()
+            .then(just!(Token::KeywordPaid)).pop()
             .then(Amount::parser())
-            .then(just!(Token::KeywordFor))
+            .then(just!(Token::KeywordFor)).pop()
             .then(Debtor::parser())
-            .then(just!(Token::Comment))
-            .map(|unwind!(_, debtor, _, amount, _, person, _)| LedgerEntry(person, amount, debtor))
+            .then(just!(Token::Comment)).pop()
+            .map(|unwind!(debtor, amount, person)| LedgerEntry(person, amount, debtor))
     }
 }
 
