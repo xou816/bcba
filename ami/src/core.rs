@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, marker::PhantomData};
 
 use super::token::Annotated;
 
@@ -45,12 +45,9 @@ impl ParseError {
     }
 }
 
-pub trait Parsable {
-    type Token;
-    fn parser() -> impl Parser<Token = Self::Token, Expression = Self>
-    where
-        Self::Token: Display + Sized,
-        Self: Sized;
+pub trait Parsable: Sized {
+    type Token: Display + Sized;
+    fn parser() -> impl Parser<Token = Self::Token, Expression = Self>;
 }
 
 pub trait Parser {

@@ -85,6 +85,7 @@ name = "bcba"
 version = "0.1.0"
 dependencies = [
  "ami",
+ "ami_derive",
  "clap",
  "regex",
  "serde",

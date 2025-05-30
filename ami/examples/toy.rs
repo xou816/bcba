@@ -4,12 +4,9 @@ use ami::parsers::*;
 use ami::prelude::*;
 use ami::toy::toy_tokenizer;
 use ami::toy::Token;
-use itertools::Itertools;
 use ami_derive::Parsable;
-use ami_derive::token_enum;
+use itertools::Itertools;
 
-
-#[token_enum]
 mod tokens {
     struct Identifier(String);
 }
@@ -126,15 +123,31 @@ enum Statement {
 }
 
 #[derive(Parsable)]
-#[parse(pattern = "if %expr { %statement }")]
+enum BoolOrStr {
+    Weird {
+        a: StrExpr,
+        b: BoolExpr,
+        c: BoolExpr,
+    },
+    Str(StrExpr),
+}
+
+#[derive(Parsable)]
+#[parse(pattern = "if %expr { %statement }", token_type = Token)]
 struct IfStatement {
     expr: BoolExpr,
     statement: PrintStm,
 }
 
-#[derive(Parsable)]
-#[parse(pattern = "true")]
-struct BoolExpr;
+struct BoolExpr(bool);
+
+impl Parsable for BoolExpr {
+    type Token = Token;
+
+    fn parser() -> impl Parser<Token = Self::Token, Expression = Self> {
+        just!(_t @ (Token::True | Token::False) => Self(_t == Token::True))
+    }
+}
 
 #[derive(Parsable)]
 #[parse(pattern = "print(%0)")]
@@ -202,7 +215,7 @@ impl Statement {
 
 impl Parsable for Statement {
     type Token = Token;
-    
+
     fn parser() -> impl Parser<Token = Self::Token, Expression = Self> {
         Self::_parser()
     }
