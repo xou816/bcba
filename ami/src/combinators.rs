@@ -7,7 +7,7 @@ use std::{
     vec,
 };
 
-use crate::token::Tokenizable;
+use crate::{core::Parsable, token::Tokenizable};
 
 use super::core::{BoxedParser, ParseResult, Parser, PeekResult};
 use super::token::Annotated;

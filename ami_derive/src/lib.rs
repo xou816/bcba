@@ -1,11 +1,11 @@
 extern crate proc_macro;
-use std::iter::{empty, once};
+use std::iter::once;
 
 use darling::FromDeriveInput;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    parse_macro_input, parse_quote, DataStruct, DeriveInput, FieldsNamed, Item, TypePath, Variant,
+    parse_macro_input, parse_quote, DeriveInput, TypePath, Variant,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -47,8 +47,6 @@ fn tokenize(str: &str) -> impl Iterator<Item = TemplateToken> + '_ {
 #[derive(FromDeriveInput)]
 #[darling(attributes(parse))]
 struct ParsableOpts {
-    #[darling(default)]
-    is_token: bool,
     #[darling(default)]
     pattern: String,
     token_type: Option<syn::Path>,

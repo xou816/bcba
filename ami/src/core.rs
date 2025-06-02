@@ -1,4 +1,4 @@
-use std::{fmt::Display, marker::PhantomData};
+use std::fmt::Display;
 
 use super::token::Annotated;
 
@@ -217,7 +217,7 @@ where
     pub fn tail(self) -> MapParser<Self, B::Expression> {
         MapParser(self, Box::new(|(_, b)| Ok(b)))
     }
-    
+
     /// Removes latest parsed Token from Expression
     pub fn pop(self) -> MapParser<Self, A::Expression> {
         MapParser(self, Box::new(|(a, _)| Ok(a)))

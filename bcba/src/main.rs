@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 mod parser;
-use parser::{tokenizer, Amount, Expression, LedgerSection, LedgerEntry, LedgerParser, Person, PersonSection};
+use parser::{tokenizer, Amount, LedgerExpression, LedgerSection, LedgerEntry, LedgerParser, Person, PersonSection};
 
 #[derive(Parser)]
 #[command(version)]
@@ -23,12 +23,12 @@ fn main() -> Result<(), String> {
         .into_iter()
         .fold(Ledger::default(), |mut ledger, ex| {
             match ex {
-                Expression::PersonSection(PersonSection(persons)) => {
+                LedgerExpression::PersonSection(PersonSection(persons)) => {
                     for p in persons {
                         ledger.add_person(p);
                     }
                 }
-                Expression::LedgerSection(LedgerSection(entries)) => {
+                LedgerExpression::LedgerSection(LedgerSection(entries)) => {
                     for LedgerEntry(creditor, amount, debtor_list) in entries {
                         let all_debtors = debtor_list.list_persons_given(&ledger.everyone);
                         let div = all_debtors.len() as f64;
@@ -72,7 +72,7 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
-fn parse(file: impl AsRef<Path>) -> Result<Vec<Expression>, String> {
+fn parse(file: impl AsRef<Path>) -> Result<Vec<LedgerExpression>, String> {
     let program = std::fs::read_to_string(file).expect("File not found");
     let mut tokens = tokenizer().tokenize(&program);
     LedgerParser::parse(&mut tokens)

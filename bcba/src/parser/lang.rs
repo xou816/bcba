@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use ami::parsers::*;
 use ami::prelude::*;
 use ami::token::Annotated;
+use ami_derive::Parsable;
 
 use super::token::Token;
 
@@ -12,31 +13,27 @@ pub struct LedgerParser;
 impl LedgerParser {
     pub fn parse(
         tokens: &mut dyn Iterator<Item = Annotated<Token>>,
-    ) -> Result<Vec<Expression>, String> {
-        let mut parser = one_of([
-            LedgerSection::parser()
-                .map(Expression::LedgerSection)
-                .tag("ledger")
-                .boxed(),
-            PersonSection::parser()
-                .map(Expression::PersonSection)
-                .tag("persons")
-                .boxed(),
-            just!(Token::LineEnd)
-                .map(|_| Expression::None)
-                .tag("none")
-                .boxed(),
-        ])
-        .tag("main");
-        parser.run_to_exhaustion(tokens).map_err(|e| e.message)
+    ) -> Result<Vec<LedgerExpression>, String> {
+        LedgerExpression::parser().run_to_exhaustion(tokens).map_err(|e| e.message)
     }
 }
 
-#[derive(Debug)]
-pub enum Expression {
+#[derive(Debug, Parsable)]
+pub enum LedgerExpression {
     PersonSection(PersonSection),
     LedgerSection(LedgerSection),
-    None,
+    None(None),
+}
+
+#[derive(Debug)]
+pub struct None;
+
+impl Parsable for None {
+    type Token = Token;
+
+    fn parser() -> impl Parser<Token = Self::Token, Expression = Self> {
+        just!(Token::LineEnd).map(|_| Self)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
@@ -113,7 +110,9 @@ impl Debtor {
 #[derive(Debug)]
 pub struct LedgerSection(pub Vec<LedgerEntry>);
 
-impl LedgerSection {
+impl Parsable for LedgerSection {
+    type Token = Token;
+
     fn parser() -> impl Parser<Token = Token, Expression = Self> {
         just!(Token::Word(_s) if _s == "transactions")
             .then(just!(Token::SectionMarker))
@@ -129,12 +128,16 @@ pub struct LedgerEntry(pub Person, pub Amount, pub Debtor);
 impl LedgerEntry {
     fn parser() -> impl Parser<Token = Token, Expression = LedgerEntry> {
         just!(Token::ListItem)
-            .then(Person::parser()).tail()
-            .then(just!(Token::KeywordPaid)).pop()
+            .then(Person::parser())
+            .tail()
+            .then(just!(Token::KeywordPaid))
+            .pop()
             .then(Amount::parser())
-            .then(just!(Token::KeywordFor)).pop()
+            .then(just!(Token::KeywordFor))
+            .pop()
             .then(Debtor::parser())
-            .then(just!(Token::Comment)).pop()
+            .then(just!(Token::Comment))
+            .pop()
             .map(|unwind!(debtor, amount, person)| LedgerEntry(person, amount, debtor))
     }
 }
@@ -142,7 +145,8 @@ impl LedgerEntry {
 #[derive(Debug)]
 pub struct PersonSection(pub Vec<Person>);
 
-impl PersonSection {
+impl Parsable for PersonSection {
+    type Token = Token;
     fn parser() -> impl Parser<Token = Token, Expression = Self> {
         just!(Token::Word(_s) if _s == "persons")
             .then(just!(Token::SectionMarker))
