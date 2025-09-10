@@ -16,7 +16,7 @@ pub enum ParseResult<Token, Result> {
 }
 
 impl<T, Result> ParseResult<T, Result> {
-    fn map_result<F, R2>(self, f: F) -> ParseResult<T, R2>
+    pub fn map<F, R2>(self, f: F) -> ParseResult<T, R2>
     where
         F: FnOnce(Result) -> R2,
     {
@@ -24,6 +24,27 @@ impl<T, Result> ParseResult<T, Result> {
             ParseResult::Complete(r, t) => ParseResult::Complete(f(r), t),
             ParseResult::Accepted(t) => ParseResult::Accepted(t),
             ParseResult::Failed(e, t) => ParseResult::Failed(e, t),
+        }
+    }
+
+    pub fn flat_map<F, R2>(self, f: F) -> ParseResult<T, R2>
+    where
+        F: FnOnce(Result, Option<Annotated<T>>) -> ParseResult<T, R2>,
+    {
+        match self {
+            ParseResult::Complete(r, t) => f(r, t),
+            ParseResult::Accepted(t) => ParseResult::Accepted(t),
+            ParseResult::Failed(e, t) => ParseResult::Failed(e, t),
+        }
+    }
+
+    pub fn or_else<F>(self, f: F) -> ParseResult<T, Result>
+    where
+        F: FnOnce(Annotated<T>) -> ParseResult<T, Result>,
+    {
+        match self {
+            ParseResult::Failed(_, t) => f(t),
+            r => r,
         }
     }
 }
@@ -245,7 +266,7 @@ where
         if self.cur_result.is_some() {
             self.next
                 .parse(token, next_token)
-                .map_result(|b| (self.cur_result.take().unwrap(), b))
+                .map(|b| (self.cur_result.take().unwrap(), b))
         } else {
             let peek_error = match self.cur.peek(&token) {
                 PeekResult::WouldComplete => match next_token.map(|n| self.next.peek(n)) {

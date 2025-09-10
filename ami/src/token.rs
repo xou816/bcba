@@ -19,6 +19,12 @@ impl<T: Display> Annotated<T> {
     pub fn describe(&self) -> String {
         format!("{} at ln {}, col {}", self.token, self.row, self.col)
     }
+
+    pub fn map(&mut self, f: impl FnOnce(&mut T)) -> &mut Self {
+        let token = &mut self.token;
+        f(token);
+        self
+    }
 }
 
 pub mod tokenizers {
@@ -67,6 +73,13 @@ pub mod tokenizers {
 
 /// Tokenizes a borrowed string to a single token T or None
 type StrTokenizer<'a, Token> = BoxedParser<'a, &'a str, Option<Annotated<Token>>>;
+
+pub trait Tokenizable
+where
+    Self: Sized,
+{
+    fn tokenizer<'a>() -> Tokenizer<'a, Self>;
+}
 
 pub struct Tokenizer<'a, Token> {
     rules: OneOfParser<'a, &'a str, Option<Annotated<Token>>>,

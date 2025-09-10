@@ -1,6 +1,9 @@
-use std::fmt::{Display};
+use std::fmt::Display;
 
-use crate::{token::{Annotated, Numeric64, Tokenizer}, tokenizers::*};
+use crate::{
+    token::{Annotated, Numeric64, Tokenizable, Tokenizer},
+    tokenizers::*,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -14,12 +17,14 @@ pub enum Token {
     True,
     False,
     And,
+    Or,
+    Not,
     Assign,
     Let,
     Identifier(String),
     LineEnd,
     LitString(String),
-    LitNum(Numeric64)
+    LitNum(Numeric64),
 }
 
 impl Token {
@@ -43,6 +48,8 @@ impl Token {
             Token::True => "true".to_owned(),
             Token::False => "false".to_owned(),
             Token::And => "and".to_owned(),
+            Token::Or => "or".to_owned(),
+            Token::Not => "not".to_owned(),
             Token::Assign => "=".to_owned(),
             Token::Let => "let".to_owned(),
             Token::Identifier(i) => i.clone(),
@@ -70,6 +77,8 @@ impl Display for Token {
             Token::LitString(_) => write!(f, "string litteral"),
             Token::LitNum(_) => write!(f, "number litteral"),
             Token::And => write!(f, "operator `and`"),
+            Token::Or => write!(f, "operator `or`"),
+            Token::Not => write!(f, "operator `not`"),
             Token::Assign => write!(f, "`=`"),
             Token::Let => write!(f, "keyword `let`"),
         }
@@ -87,6 +96,8 @@ pub fn toy_tokenizer<'a>() -> Tokenizer<'a, Token> {
         keyword("=", Token::Assign),
         keyword("let", Token::Let),
         keyword("&&", Token::And),
+        keyword("||", Token::Or),
+        keyword("!", Token::Not),
         keyword("{", Token::BraceOpen),
         keyword("}", Token::BraceClose),
         keyword("(", Token::ParenOpen),
@@ -97,6 +108,12 @@ pub fn toy_tokenizer<'a>() -> Tokenizer<'a, Token> {
         identifier(Token::Identifier),
         numeric(Token::LitNum),
         delimited("\"", "\"", Token::LitString),
-        ignore_whitespace()
+        ignore_whitespace(),
     ])
+}
+
+impl Tokenizable for Token {
+    fn tokenizer<'a>() -> Tokenizer<'a, Self> {
+        toy_tokenizer()
+    }
 }

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::{
     cell::{RefCell, RefMut},
     fmt::Display,
@@ -202,6 +201,200 @@ where
     fn reset(&mut self) {
         self.i = 0;
         self.collected = vec![];
+    }
+}
+
+pub enum OperatorKind {
+    Binary,
+    Unary,
+}
+
+pub struct OperatorToken<T> {
+    token: T,
+    precedence: u8,
+    kind: OperatorKind,
+}
+
+impl<T> OperatorToken<T> {
+    fn new_binary(t: T, precedence: u8) -> Self {
+        return OperatorToken {
+            token: t,
+            precedence,
+            kind: OperatorKind::Binary,
+        };
+    }
+}
+
+pub trait MathExpression: Sized {
+    type Token;
+
+    fn as_operator(token: &Self::Token, kind: OperatorKind) -> Option<OperatorToken<Self::Token>>;
+
+    fn as_operand(token: Annotated<Self::Token>) -> Result<Self, Annotated<Self::Token>>;
+
+    fn combine(lhs: Option<Self>, op: OperatorToken<Self::Token>, rhs: Self) -> Self;
+}
+
+enum MathParserState<T, E> {
+    Initial,
+    LHSParsed(E),
+    OperatorParsed(Option<E>, OperatorToken<T>),
+    ParsingRHS(Option<E>, OperatorToken<T>, Box<MathExpressionParser<T, E>>),
+}
+
+pub struct MathExpressionParser<T, E> {
+    state: MathParserState<T, E>,
+    min_precedence: u8,
+}
+
+impl<T, E> Parser for MathExpressionParser<T, E>
+where
+    T: Display,
+    E: MathExpression<Token = T>,
+{
+    type Token = T;
+    type Expression = E;
+
+    fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
+        PeekResult::WouldAccept
+    }
+
+    fn parse(
+        &mut self,
+        token: Annotated<Self::Token>,
+        next_token: Option<&Annotated<Self::Token>>,
+    ) -> ParseResult<Self::Token, Self::Expression> {
+        match std::mem::replace(&mut self.state, MathParserState::Initial) {
+            MathParserState::Initial => self
+                .parse_operand(token)
+                .flat_map(|expr, t| self.maybe_complete(expr, t, next_token))
+                .or_else(|t| {
+                    self.parse_operator(t, OperatorKind::Unary)
+                        .flat_map(|op, t| {
+                            self.state = MathParserState::OperatorParsed(None, op);
+                            ParseResult::Accepted(t)
+                        })
+                }),
+
+            MathParserState::LHSParsed(lhs) => self
+                .parse_operator(token, OperatorKind::Binary)
+                .flat_map(|op, t| {
+                    self.state = MathParserState::OperatorParsed(Some(lhs), op);
+                    ParseResult::Accepted(t)
+                }),
+
+            MathParserState::OperatorParsed(lhs, op) => match self.parse_operand(token) {
+                ParseResult::Complete(expr, _) => self.parse_rhs(lhs, op, expr, next_token),
+                ParseResult::Failed(_, t) => {
+                    self.parse_operator(t, OperatorKind::Unary)
+                        .flat_map(|next_op, t| {
+                            let next_parser = Box::new(Self {
+                                state: MathParserState::OperatorParsed(None, next_op),
+                                min_precedence: op.precedence,
+                            });
+                            self.state = MathParserState::ParsingRHS(lhs, op, next_parser);
+                            ParseResult::Accepted(t)
+                        })
+                }
+                ParseResult::Accepted(_) => unreachable!(),
+            },
+
+            MathParserState::ParsingRHS(lhs, op, mut parser) => {
+                match parser.parse(token, next_token) {
+                    ParseResult::Accepted(token) => {
+                        self.state = MathParserState::ParsingRHS(lhs, op, parser);
+                        ParseResult::Accepted(token)
+                    }
+                    ParseResult::Complete(rhs, token) => {
+                        let final_expr = E::combine(lhs, op, rhs);
+                        self.maybe_complete(final_expr, token, next_token)
+                    }
+                    ParseResult::Failed(_, token) => self.fail_token("error parsing rhs", token),
+                }
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        self.state = MathParserState::Initial
+    }
+}
+
+impl<T, E> MathExpressionParser<T, E>
+where
+    E: MathExpression<Token = T>,
+    T: Display,
+{
+    fn new() -> Self {
+        Self {
+            state: MathParserState::Initial,
+            min_precedence: 0,
+        }
+    }
+
+    fn maybe_complete(
+        &mut self,
+        expr: E,
+        token: Option<Annotated<T>>,
+        next_token: Option<&Annotated<T>>,
+    ) -> ParseResult<T, E> {
+        if next_token.is_some() {
+            self.state = MathParserState::LHSParsed(expr);
+            ParseResult::Accepted(token)
+        } else {
+            self.complete(expr, token)
+        }
+    }
+
+    fn parse_operator(
+        &mut self,
+        token: Annotated<T>,
+        kind: OperatorKind,
+    ) -> ParseResult<T, OperatorToken<T>> {
+        match E::as_operator(&token.token, kind) {
+            Some(op) => ParseResult::Complete(op, None),
+            None => ParseResult::Failed("expected operator".to_string(), token),
+        }
+    }
+
+    fn parse_operand(&mut self, token: Annotated<T>) -> ParseResult<T, E> {
+        match E::as_operand(token) {
+            Ok(expr) => ParseResult::Complete(expr, None),
+            Err(token) => ParseResult::Failed("expected operand".to_string(), token),
+        }
+    }
+
+    fn parse_rhs(
+        &mut self,
+        current_lhs: Option<E>,
+        current_op: OperatorToken<T>,
+        rhs: E,
+        next_token: Option<&Annotated<T>>,
+    ) -> ParseResult<T, E> {
+        let next_op = next_token.and_then(|t| E::as_operator(&t.token, OperatorKind::Binary));
+
+        match next_op {
+            Some(next_op)
+                if next_op.precedence <= current_op.precedence
+                    && next_op.precedence > self.min_precedence =>
+            {
+                let next_lhs = E::combine(current_lhs, current_op, rhs);
+                self.state = MathParserState::LHSParsed(next_lhs);
+                ParseResult::Accepted(None)
+            }
+            Some(next_op) if next_op.precedence > current_op.precedence => {
+                let next_parser = Box::new(Self {
+                    state: MathParserState::LHSParsed(rhs),
+                    min_precedence: current_op.precedence,
+                });
+                self.state = MathParserState::ParsingRHS(current_lhs, current_op, next_parser);
+                ParseResult::Accepted(None)
+            }
+            _ => {
+                let final_expr = E::combine(current_lhs, current_op, rhs);
+                self.complete(final_expr, None)
+            }
+        }
     }
 }
 
@@ -525,7 +718,10 @@ macro_rules! just {
 mod tests {
 
     use super::*;
-    use crate::{parsers::list_of, toy::Token};
+    use crate::{
+        parsers::list_of,
+        toy::{self, Token},
+    };
 
     fn make_line(t: impl IntoIterator<Item = Token>) -> impl Iterator<Item = Annotated<Token>> {
         t.into_iter().enumerate().map(|(i, t)| t.at(1, i + 1))
@@ -630,5 +826,113 @@ mod tests {
         assert_eq!(c, 1);
         assert_eq!(b, 2);
         assert_eq!(a, 3);
+    }
+
+    #[test]
+    fn test_math() {
+        let mut parser = MathExpressionParser::<toy::Token, ToyBinaryExp>::new();
+
+        // !false || true || true && false || !true
+        let mut tokens = make_line([
+            Token::Not,
+            Token::False,
+            Token::Or,
+            Token::True,
+            Token::Or,
+            Token::True,
+            Token::And,
+            Token::False,
+            Token::Or,
+            Token::Not,
+            Token::True,
+        ]);
+
+        let res = parser.run_to_completion(&mut tokens);
+        assert!(dbg!(&res).is_ok());
+        assert_eq!(
+            "(((!(false) || true) || (true && false)) || !(true))",
+            res.unwrap().to_string()
+        );
+    }
+
+    #[derive(Debug)]
+    enum ToyBinaryExp {
+        Atom(bool),
+        Or(Box<ToyBinaryExp>, Box<ToyBinaryExp>),
+        And(Box<ToyBinaryExp>, Box<ToyBinaryExp>),
+        Not(Box<ToyBinaryExp>),
+    }
+
+    impl Display for ToyBinaryExp {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                ToyBinaryExp::Atom(b) => f.write_str(&b.to_string()),
+                ToyBinaryExp::Or(lhs, rhs) => f.write_fmt(format_args!("({lhs} || {rhs})")),
+                ToyBinaryExp::And(lhs, rhs) => f.write_fmt(format_args!("({lhs} && {rhs})")),
+                ToyBinaryExp::Not(rhs) => f.write_fmt(format_args!("!({rhs})")),
+            }
+        }
+    }
+
+    impl MathExpression for ToyBinaryExp {
+        type Token = toy::Token;
+
+        fn as_operator(
+            token: &Self::Token,
+            kind: OperatorKind,
+        ) -> Option<OperatorToken<Self::Token>> {
+            match (token, kind) {
+                (Self::Token::And, OperatorKind::Binary) => {
+                    Some(OperatorToken::new_binary(Self::Token::And, 2))
+                }
+                (Self::Token::Or, OperatorKind::Binary) => {
+                    Some(OperatorToken::new_binary(Self::Token::Or, 1))
+                }
+                (Self::Token::Not, OperatorKind::Unary) => Some(OperatorToken {
+                    token: Self::Token::Not,
+                    precedence: 1,
+                    kind: OperatorKind::Unary,
+                }),
+                _ => None,
+            }
+        }
+
+        fn as_operand(token: Annotated<Self::Token>) -> Result<Self, Annotated<Self::Token>> {
+            match &token.token {
+                toy::Token::True => Ok(ToyBinaryExp::Atom(true)),
+                toy::Token::False => Ok(ToyBinaryExp::Atom(false)),
+                _ => Err(token),
+            }
+        }
+
+        fn combine(lhs: Option<Self>, op: OperatorToken<Self::Token>, rhs: Self) -> Self {
+            match (lhs, op) {
+                (
+                    Some(lhs),
+                    OperatorToken {
+                        kind: OperatorKind::Binary,
+                        token: Self::Token::And,
+                        ..
+                    },
+                ) => Self::And(Box::new(lhs), Box::new(rhs)),
+                (
+                    Some(lhs),
+                    OperatorToken {
+                        kind: OperatorKind::Binary,
+                        token: Self::Token::Or,
+                        ..
+                    },
+                ) => Self::Or(Box::new(lhs), Box::new(rhs)),
+                (
+                    None,
+                    OperatorToken {
+                        kind: OperatorKind::Unary,
+                        token: Self::Token::Not,
+                        ..
+                    },
+                ) => Self::Not(Box::new(rhs)),
+                _ => unreachable!(),
+            }
+        }
     }
 }
