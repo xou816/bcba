@@ -204,9 +204,12 @@ where
     }
 }
 
+#[derive(PartialEq, Eq)]
 pub enum OperatorKind {
     Binary,
     Unary,
+    PrecedenceGroupStart,
+    PrecedenceGroupEnd,
 }
 
 pub struct OperatorToken<T> {
@@ -216,11 +219,34 @@ pub struct OperatorToken<T> {
 }
 
 impl<T> OperatorToken<T> {
-    fn new_binary(t: T, precedence: u8) -> Self {
+    pub fn new_binary(t: T, precedence: u8) -> Self {
         return OperatorToken {
             token: t,
             precedence,
             kind: OperatorKind::Binary,
+        };
+    }
+
+    pub fn new_unary(t: T, precedence: u8) -> Self {
+        return OperatorToken {
+            token: t,
+            precedence,
+            kind: OperatorKind::Unary,
+        };
+    }
+
+    pub fn new_start_group(t: T) -> Self {
+        return OperatorToken {
+            token: t,
+            precedence: 0,
+            kind: OperatorKind::PrecedenceGroupStart,
+        };
+    }
+    pub fn new_end_group(t: T) -> Self {
+        return OperatorToken {
+            token: t,
+            precedence: 0,
+            kind: OperatorKind::PrecedenceGroupEnd,
         };
     }
 }
@@ -237,6 +263,7 @@ pub trait MathExpression: Sized {
 
 enum MathParserState<T, E> {
     Initial,
+    ParsingLHS(Box<MathExpressionParser<T, E>>),
     LHSParsed(E),
     OperatorParsed(Option<E>, OperatorToken<T>),
     ParsingRHS(Option<E>, OperatorToken<T>, Box<MathExpressionParser<T, E>>),
@@ -269,34 +296,54 @@ where
                 .parse_operand(token)
                 .flat_map(|expr, t| self.maybe_complete(expr, t, next_token))
                 .or_else(|t| {
-                    self.parse_operator(t, OperatorKind::Unary)
-                        .flat_map(|op, t| {
+                    self.parse_operators(
+                        t,
+                        [OperatorKind::Unary, OperatorKind::PrecedenceGroupStart],
+                    )
+                    .flat_map(|op, t| match op.kind {
+                        OperatorKind::Unary => {
                             self.state = MathParserState::OperatorParsed(None, op);
                             ParseResult::Accepted(t)
-                        })
+                        }
+                        OperatorKind::PrecedenceGroupStart => {
+                            let next_parser = Box::new(Self {
+                                state: MathParserState::Initial,
+                                min_precedence: 0,
+                            });
+                            self.state = MathParserState::ParsingLHS(next_parser);
+                            ParseResult::Accepted(t)
+                        }
+                        _ => unreachable!(),
+                    })
                 }),
 
             MathParserState::LHSParsed(lhs) => self
-                .parse_operator(token, OperatorKind::Binary)
-                .flat_map(|op, t| {
-                    self.state = MathParserState::OperatorParsed(Some(lhs), op);
-                    ParseResult::Accepted(t)
+                .parse_operators(
+                    token,
+                    [OperatorKind::Binary, OperatorKind::PrecedenceGroupEnd],
+                )
+                .flat_map(|op, t| match op.kind {
+                    OperatorKind::Binary => {
+                        self.state = MathParserState::OperatorParsed(Some(lhs), op);
+                        ParseResult::Accepted(t)
+                    }
+                    OperatorKind::PrecedenceGroupEnd => self.complete(lhs, t),
+                    _ => unreachable!(),
                 }),
 
             MathParserState::OperatorParsed(lhs, op) => match self.parse_operand(token) {
-                ParseResult::Complete(expr, _) => self.parse_rhs(lhs, op, expr, next_token),
-                ParseResult::Failed(_, t) => {
-                    self.parse_operator(t, OperatorKind::Unary)
-                        .flat_map(|next_op, t| {
-                            let next_parser = Box::new(Self {
-                                state: MathParserState::OperatorParsed(None, next_op),
-                                min_precedence: op.precedence,
-                            });
-                            self.state = MathParserState::ParsingRHS(lhs, op, next_parser);
-                            ParseResult::Accepted(t)
-                        })
-                }
+                ParseResult::Complete(expr, _) => self.parse_rhs_operand(lhs, op, expr, next_token),
+                ParseResult::Failed(_, t) => self.parse_rhs_other(lhs, op, t),
                 ParseResult::Accepted(_) => unreachable!(),
+            },
+
+            MathParserState::ParsingLHS(mut parser) => match parser.parse(token, next_token) {
+                ParseResult::Accepted(token) => {
+                    self.state = MathParserState::ParsingLHS(parser);
+                    ParseResult::Accepted(token)
+                }
+                ParseResult::Complete(rhs, token) => self.maybe_complete(rhs, token, next_token),
+                ParseResult::Failed(_, token) => self.fail_token("error parsing rhs", token),
             },
 
             MathParserState::ParsingRHS(lhs, op, mut parser) => {
@@ -316,7 +363,8 @@ where
     }
 
     fn reset(&mut self) {
-        self.state = MathParserState::Initial
+        self.state = MathParserState::Initial;
+        self.min_precedence = 0;
     }
 }
 
@@ -346,12 +394,22 @@ where
         }
     }
 
-    fn parse_operator(
+    fn as_operator<const N: usize>(
+        &self,
+        token: &T,
+        kinds: [OperatorKind; N],
+    ) -> Option<OperatorToken<T>> {
+        kinds
+            .into_iter()
+            .fold(None, |op, kind| op.or_else(|| E::as_operator(token, kind)))
+    }
+
+    fn parse_operators<const N: usize>(
         &mut self,
         token: Annotated<T>,
-        kind: OperatorKind,
+        kinds: [OperatorKind; N],
     ) -> ParseResult<T, OperatorToken<T>> {
-        match E::as_operator(&token.token, kind) {
+        match self.as_operator(&token.token, kinds) {
             Some(op) => ParseResult::Complete(op, None),
             None => ParseResult::Failed("expected operator".to_string(), token),
         }
@@ -364,19 +422,56 @@ where
         }
     }
 
-    fn parse_rhs(
+    fn parse_rhs_other(
+        &mut self,
+        current_lhs: Option<E>,
+        current_op: OperatorToken<T>,
+        token: Annotated<T>,
+    ) -> ParseResult<T, E> {
+        self.parse_operators(
+            token,
+            [OperatorKind::Unary, OperatorKind::PrecedenceGroupStart],
+        )
+        .flat_map(|next_op, t| match next_op.kind {
+            OperatorKind::Unary => {
+                let next_parser = Box::new(Self {
+                    state: MathParserState::OperatorParsed(None, next_op),
+                    min_precedence: current_op.precedence,
+                });
+                self.state = MathParserState::ParsingRHS(current_lhs, current_op, next_parser);
+                ParseResult::Accepted(t)
+            }
+            OperatorKind::PrecedenceGroupStart => {
+                let next_parser = Box::new(Self {
+                    state: MathParserState::Initial,
+                    min_precedence: 0,
+                });
+                self.state = MathParserState::ParsingRHS(current_lhs, current_op, next_parser);
+                ParseResult::Accepted(t)
+            }
+            _ => unreachable!(),
+        })
+    }
+
+    fn parse_rhs_operand(
         &mut self,
         current_lhs: Option<E>,
         current_op: OperatorToken<T>,
         rhs: E,
         next_token: Option<&Annotated<T>>,
     ) -> ParseResult<T, E> {
-        let next_op = next_token.and_then(|t| E::as_operator(&t.token, OperatorKind::Binary));
+        let next_op = next_token.and_then(|t| {
+            self.as_operator(
+                &t.token,
+                [OperatorKind::Binary, OperatorKind::PrecedenceGroupEnd],
+            )
+        });
 
         match next_op {
             Some(next_op)
-                if next_op.precedence <= current_op.precedence
-                    && next_op.precedence > self.min_precedence =>
+                if next_op.kind == OperatorKind::PrecedenceGroupEnd
+                    || next_op.precedence <= current_op.precedence
+                        && next_op.precedence > self.min_precedence =>
             {
                 let next_lhs = E::combine(current_lhs, current_op, rhs);
                 self.state = MathParserState::LHSParsed(next_lhs);
@@ -855,6 +950,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_math2() {
+        let mut parser = MathExpressionParser::<toy::Token, ToyBinaryExp>::new();
+
+        // true && (false || true) && false
+        let mut tokens = make_line([
+            Token::True,
+            Token::And,
+            Token::ParenOpen,
+            Token::False,
+            Token::Or,
+            Token::True,
+            Token::ParenClose,
+            Token::And,
+            Token::False,
+        ]);
+
+        let res = parser.run_to_completion(&mut tokens);
+        assert!(dbg!(&res).is_ok());
+        assert_eq!(
+            "((true && (false || true)) && false)",
+            res.unwrap().to_string()
+        );
+    }
+
     #[derive(Debug)]
     enum ToyBinaryExp {
         Atom(bool),
@@ -888,11 +1008,15 @@ mod tests {
                 (Self::Token::Or, OperatorKind::Binary) => {
                     Some(OperatorToken::new_binary(Self::Token::Or, 1))
                 }
-                (Self::Token::Not, OperatorKind::Unary) => Some(OperatorToken {
-                    token: Self::Token::Not,
-                    precedence: 1,
-                    kind: OperatorKind::Unary,
-                }),
+                (Self::Token::Not, OperatorKind::Unary) => {
+                    Some(OperatorToken::new_unary(Self::Token::Not, 1))
+                }
+                (Self::Token::ParenOpen, OperatorKind::PrecedenceGroupStart) => {
+                    Some(OperatorToken::new_start_group(Self::Token::ParenOpen))
+                }
+                (Self::Token::ParenClose, OperatorKind::PrecedenceGroupEnd) => {
+                    Some(OperatorToken::new_end_group(Self::Token::ParenClose))
+                }
                 _ => None,
             }
         }
@@ -906,31 +1030,14 @@ mod tests {
         }
 
         fn combine(lhs: Option<Self>, op: OperatorToken<Self::Token>, rhs: Self) -> Self {
-            match (lhs, op) {
-                (
-                    Some(lhs),
-                    OperatorToken {
-                        kind: OperatorKind::Binary,
-                        token: Self::Token::And,
-                        ..
-                    },
-                ) => Self::And(Box::new(lhs), Box::new(rhs)),
-                (
-                    Some(lhs),
-                    OperatorToken {
-                        kind: OperatorKind::Binary,
-                        token: Self::Token::Or,
-                        ..
-                    },
-                ) => Self::Or(Box::new(lhs), Box::new(rhs)),
-                (
-                    None,
-                    OperatorToken {
-                        kind: OperatorKind::Unary,
-                        token: Self::Token::Not,
-                        ..
-                    },
-                ) => Self::Not(Box::new(rhs)),
+            match (lhs, op.kind, op.token) {
+                (Some(lhs), OperatorKind::Binary, Self::Token::And) => {
+                    Self::And(Box::new(lhs), Box::new(rhs))
+                }
+                (Some(lhs), OperatorKind::Binary, Self::Token::Or) => {
+                    Self::Or(Box::new(lhs), Box::new(rhs))
+                }
+                (None, OperatorKind::Unary, Self::Token::Not) => Self::Not(Box::new(rhs)),
                 _ => unreachable!(),
             }
         }
