@@ -1,6 +1,9 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
+use ami::math::MathExpression;
+use ami::math::OperatorKind;
+use ami::math::OperatorToken;
 use ami::parsers::*;
 use ami::prelude::*;
 use ami::token::Annotated;
@@ -39,6 +42,55 @@ pub enum Expression {
     None,
 }
 
+pub enum ComplexAmount {
+    Just(f64),
+    Add(Box<ComplexAmount>, Box<ComplexAmount>),
+    Sub(Box<ComplexAmount>, Box<ComplexAmount>),
+    Mul(Box<ComplexAmount>, Box<ComplexAmount>),
+}
+
+impl ComplexAmount {
+    fn eval(self) -> f64 {
+        match self {
+            ComplexAmount::Just(f) => f,
+            ComplexAmount::Add(a, b) => a.eval() + b.eval(),
+            ComplexAmount::Sub(a, b) => a.eval() - b.eval(),
+            ComplexAmount::Mul(a, b) => a.eval() * b.eval(),
+        }
+    }
+}
+
+impl MathExpression for ComplexAmount {
+    type Token = Token;
+
+    fn as_operator(token: &Self::Token, kind: OperatorKind) -> Option<OperatorToken<Self::Token>> {
+        match (token, kind) {
+            (Token::Plus, OperatorKind::Binary) => Some(OperatorToken::new_binary(Token::Plus, 1)),
+            (Token::Min, OperatorKind::Binary) => Some(OperatorToken::new_binary(Token::Min, 1)),
+            (Token::Min, OperatorKind::Unary) => Some(OperatorToken::new_unary(Token::Min, 1)),
+            (Token::Mul, OperatorKind::Binary) => Some(OperatorToken::new_binary(Token::Mul, 2)),
+            _ => None,
+        }
+    }
+
+    fn as_operand(token: Annotated<Self::Token>) -> Result<Self, Annotated<Self::Token>> {
+        match &token.token {
+            Token::Price(f) => Ok(Self::Just(*f)),
+            _ => Err(token),
+        }
+    }
+
+    fn combine(lhs: Option<Self>, op: OperatorToken<Self::Token>, rhs: Self) -> Self {
+        match (lhs, op.token, rhs) {
+            (Some(lhs), Token::Plus, rhs) => Self::Add(Box::new(lhs), Box::new(rhs)),
+            (Some(lhs), Token::Min, rhs) => Self::Sub(Box::new(lhs), Box::new(rhs)),
+            (None, Token::Min, rhs) => Self::Sub(Box::new(Self::Just(0.0)), Box::new(rhs)),
+            (Some(lhs), Token::Mul, rhs) => Self::Mul(Box::new(lhs), Box::new(rhs)),
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Amount(pub f64);
 
@@ -53,8 +105,9 @@ impl Amount {
 
     pub fn parser() -> impl Parser<Token = Token, Expression = Amount> {
         just!(Token::DollarSymbol)
-            .then(just!(Token::Price(_w) => _w))
-            .map(|(_, a)| Amount(a))
+            .then(precedence::<ComplexAmount>())
+            // .then(just!(Token::Price(_w) => _w))
+            .map(|(_, a)| Amount(a.eval()))
     }
 }
 
@@ -128,13 +181,17 @@ pub struct LedgerEntry(pub Person, pub Amount, pub Debtor);
 
 impl LedgerEntry {
     fn parser() -> impl Parser<Token = Token, Expression = LedgerEntry> {
-        just!(Token::ListItem)
-            .then(Person::parser()).tail()
-            .then(just!(Token::KeywordPaid)).pop()
+        just!(Token::Min)
+            .then(Person::parser())
+            .tail()
+            .then(just!(Token::KeywordPaid))
+            .pop()
             .then(Amount::parser())
-            .then(just!(Token::KeywordFor)).pop()
+            .then(just!(Token::KeywordFor))
+            .pop()
             .then(Debtor::parser())
-            .then(just!(Token::Comment)).pop()
+            .then(just!(Token::Comment))
+            .pop()
             .map(|unwind!(debtor, amount, person)| LedgerEntry(person, amount, debtor))
     }
 }
@@ -149,7 +206,7 @@ impl PersonSection {
             .then(just!(Token::LineEnd))
             .then(list_of(
                 Token::LineEnd,
-                just!(Token::ListItem)
+                just!(Token::Min)
                     .then(Person::parser())
                     .map(|unwind!(p, _)| p),
             ))
@@ -195,12 +252,12 @@ mod tests {
     fn test_ledger_entry() {
         let mut parser = LedgerEntry::parser();
         let mut tokens =
-            tokenizer().tokenize("- @Foo paid $30 for everyone but @Bar (no reason)\n");
+            tokenizer().tokenize("- @Foo paid $-5+5*5+5 for everyone but @Bar (no reason)\n");
         let res = parser.run_to_completion(&mut tokens);
         dbg!(&res);
         assert!(matches!(
             res,
-            Ok(LedgerEntry(_, Amount(30.0), Debtor::EveryoneBut(_)))
+            Ok(LedgerEntry(_, Amount(25.0), Debtor::EveryoneBut(_)))
         ));
     }
 

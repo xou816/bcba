@@ -467,7 +467,7 @@ impl Eq for Numeric64 {}
 
 enum NumericElement {
     Dot,
-    MinusSign,
+    // MinusSign,
     Digit(u32),
 }
 
@@ -484,7 +484,7 @@ impl TryFrom<&'_ str> for NumericElement {
         }
         match char {
             '.' => Ok(Self::Dot),
-            '-' => Ok(Self::MinusSign),
+            // '-' => Ok(Self::MinusSign),
             _ => Err("Unexpected char".to_string()),
         }
     }
@@ -579,11 +579,11 @@ where
         };
         let next_token = next_token.and_then(|t| NumericElement::try_from(t.token).ok());
         match (el, next_token, self.pre, self.post) {
-            (NumericElement::MinusSign, Some(NumericElement::Digit(_)), None, None) => {
-                self.neg = true;
-                self.pre = Some(0);
-                ParseResult::Accepted(None)
-            }
+            // (NumericElement::MinusSign, Some(NumericElement::Digit(_)), None, None) => {
+            //     self.neg = true;
+            //     self.pre = Some(0);
+            //     ParseResult::Accepted(None)
+            // }
             (
                 NumericElement::Digit(d),
                 Some(NumericElement::Digit(_) | NumericElement::Dot),
@@ -662,11 +662,11 @@ mod tests {
     fn test_numeric() {
         let mut tokenizer = SimplisticNumericTokenizer::new(Token::LitNum);
 
-        let mut tokens = make_line("-12.989");
+        let mut tokens = make_line("12.989");
         let res = tokenizer.run_to_completion(&mut tokens);
         assert_eq!(
             res,
-            Ok(Some(Token::LitNum(Numeric64::Float(-12.9890)).at(1, 1)))
+            Ok(Some(Token::LitNum(Numeric64::Float(12.9890)).at(1, 1)))
         )
     }
 

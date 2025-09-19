@@ -5,7 +5,7 @@ use ami::{token::Tokenizer, tokenizers::*};
 #[derive(Debug, Clone)]
 pub enum Token {
     NameAnchor,
-    ListItem,
+    Min,
     DollarSymbol,
     Comment,
     KeywordPaid,
@@ -17,12 +17,14 @@ pub enum Token {
     SectionMarker,
     Word(String),
     Price(f64),
+    Plus,
+    Mul,
 }
 
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Token::ListItem => write!(f, "list item"),
+            Token::Min => write!(f, "list item"),
             Token::KeywordPaid => write!(f, "keyword `paid`"),
             Token::NameAnchor => write!(f, "name anchor `@`"),
             Token::Word(w) => write!(f, "token `{}`", w),
@@ -35,6 +37,8 @@ impl Display for Token {
             Token::KeywordEveryone => write!(f, "keyword `everyone`"),
             Token::KeywordBut => write!(f, "keyword `but`"),
             Token::Price(_) => write!(f, "numeric value"),
+            Token::Plus => write!(f, "plus operator"),
+            Token::Mul => write!(f, "multiply operator"),
         }
     }
 }
@@ -58,11 +62,13 @@ pub fn tokenizer<'a>() -> Tokenizer<'a, Token> {
         keyword("paid", Token::KeywordPaid),
         keyword("for", Token::KeywordFor),
         keyword("@", Token::NameAnchor),
-        keyword("-", Token::ListItem),
+        keyword("-", Token::Min),
         keyword("$", Token::DollarSymbol),
         keyword("\n", Token::LineEnd),
         keyword(",", Token::Comma),
         keyword(":", Token::SectionMarker),
+        keyword("+", Token::Plus),
+        keyword("*", Token::Mul),
         delimited("(", ")", |_| Token::Comment),
         identifier(Token::Word),
         numeric(|n| match n {

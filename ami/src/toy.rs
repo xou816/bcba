@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{write, Display};
 
 use crate::{
     token::{Annotated, Numeric64, Tokenizable, Tokenizer},
@@ -19,6 +19,9 @@ pub enum Token {
     And,
     Or,
     Not,
+    Plus,
+    Minus,
+    Multiply,
     Assign,
     Let,
     Identifier(String),
@@ -56,6 +59,9 @@ impl Token {
             Token::LineEnd => "\n".to_owned(),
             Token::LitString(s) => format!("\"{s}\""),
             Token::LitNum(_) => "".to_owned(),
+            Token::Plus => "plus".to_owned(),
+            Token::Minus => "minus".to_owned(),
+            Token::Multiply => "multiply".to_owned(),
         }
     }
 }
@@ -81,6 +87,9 @@ impl Display for Token {
             Token::Not => write!(f, "operator `not`"),
             Token::Assign => write!(f, "`=`"),
             Token::Let => write!(f, "keyword `let`"),
+            Token::Plus => write!(f, "operator `+`"),
+            Token::Minus => write!(f, "operator `-`"),
+            Token::Multiply => write!(f, "operator `*`"),
         }
     }
 }
@@ -98,6 +107,9 @@ pub fn toy_tokenizer<'a>() -> Tokenizer<'a, Token> {
         keyword("&&", Token::And),
         keyword("||", Token::Or),
         keyword("!", Token::Not),
+        keyword("+", Token::Plus),
+        keyword("-", Token::Minus),
+        keyword("*", Token::Multiply),
         keyword("{", Token::BraceOpen),
         keyword("}", Token::BraceClose),
         keyword("(", Token::ParenOpen),

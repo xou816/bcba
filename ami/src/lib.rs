@@ -3,6 +3,8 @@ pub mod core;
 pub mod combinators;
 pub use combinators::parsers;
 
+pub mod math;
+
 pub mod token;
 pub use token::tokenizers;
 
