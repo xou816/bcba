@@ -1,9 +1,10 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
+use ami::math::Assoc;
 use ami::math::MathExpression;
-use ami::math::OperatorKind;
-use ami::math::OperatorToken;
+use ami::math::OpKind;
+use ami::math::OpToken;
 use ami::parsers::*;
 use ami::prelude::*;
 use ami::token::Annotated;
@@ -63,12 +64,12 @@ impl ComplexAmount {
 impl MathExpression for ComplexAmount {
     type Token = Token;
 
-    fn as_operator(token: &Self::Token, kind: OperatorKind) -> Option<OperatorToken<Self::Token>> {
+    fn as_operator(token: &Self::Token, kind: OpKind) -> Option<OpToken<Self::Token>> {
         match (token, kind) {
-            (Token::Plus, OperatorKind::Binary) => Some(OperatorToken::new_binary(Token::Plus, 1)),
-            (Token::Min, OperatorKind::Binary) => Some(OperatorToken::new_binary(Token::Min, 1)),
-            (Token::Min, OperatorKind::Unary) => Some(OperatorToken::new_unary(Token::Min, 1)),
-            (Token::Mul, OperatorKind::Binary) => Some(OperatorToken::new_binary(Token::Mul, 2)),
+            (Token::Plus, OpKind::Binary) => Some(OpToken::new_binary(Token::Plus, 1, Assoc::Left)),
+            (Token::Min, OpKind::Binary) => Some(OpToken::new_binary(Token::Min, 1, Assoc::Left)),
+            (Token::Min, OpKind::Prefix) => Some(OpToken::new_prefix(Token::Min, 1)),
+            (Token::Mul, OpKind::Binary) => Some(OpToken::new_binary(Token::Mul, 2, Assoc::Left)),
             _ => None,
         }
     }
@@ -80,12 +81,12 @@ impl MathExpression for ComplexAmount {
         }
     }
 
-    fn combine(lhs: Option<Self>, op: OperatorToken<Self::Token>, rhs: Self) -> Self {
+    fn combine(lhs: Option<Self>, op: OpToken<Self::Token>, rhs: Option<Self>) -> Self {
         match (lhs, op.token, rhs) {
-            (Some(lhs), Token::Plus, rhs) => Self::Add(Box::new(lhs), Box::new(rhs)),
-            (Some(lhs), Token::Min, rhs) => Self::Sub(Box::new(lhs), Box::new(rhs)),
-            (None, Token::Min, rhs) => Self::Sub(Box::new(Self::Just(0.0)), Box::new(rhs)),
-            (Some(lhs), Token::Mul, rhs) => Self::Mul(Box::new(lhs), Box::new(rhs)),
+            (Some(lhs), Token::Plus, Some(rhs)) => Self::Add(Box::new(lhs), Box::new(rhs)),
+            (Some(lhs), Token::Min, Some(rhs)) => Self::Sub(Box::new(lhs), Box::new(rhs)),
+            (None, Token::Min, Some(rhs)) => Self::Sub(Box::new(Self::Just(0.0)), Box::new(rhs)),
+            (Some(lhs), Token::Mul, Some(rhs)) => Self::Mul(Box::new(lhs), Box::new(rhs)),
             _ => unreachable!(),
         }
     }

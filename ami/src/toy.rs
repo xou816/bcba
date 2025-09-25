@@ -21,13 +21,15 @@ pub enum Token {
     Not,
     Plus,
     Minus,
-    Multiply,
+    Times,
+    Factorial,
     Assign,
     Let,
     Identifier(String),
     LineEnd,
     LitString(String),
     LitNum(Numeric64),
+    Exponent,
 }
 
 impl Token {
@@ -58,10 +60,13 @@ impl Token {
             Token::Identifier(i) => i.clone(),
             Token::LineEnd => "\n".to_owned(),
             Token::LitString(s) => format!("\"{s}\""),
-            Token::LitNum(_) => "".to_owned(),
-            Token::Plus => "plus".to_owned(),
-            Token::Minus => "minus".to_owned(),
-            Token::Multiply => "multiply".to_owned(),
+            Token::LitNum(Numeric64::Int(i)) => i.to_string(),
+            Token::LitNum(Numeric64::Float(f)) => f.to_string(),
+            Token::Plus => "+".to_owned(),
+            Token::Minus => "-".to_owned(),
+            Token::Times => "*".to_owned(),
+            Token::Exponent => "^".to_owned(),
+            Token::Factorial => "!".to_owned(),
         }
     }
 }
@@ -89,7 +94,9 @@ impl Display for Token {
             Token::Let => write!(f, "keyword `let`"),
             Token::Plus => write!(f, "operator `+`"),
             Token::Minus => write!(f, "operator `-`"),
-            Token::Multiply => write!(f, "operator `*`"),
+            Token::Times => write!(f, "operator `*`"),
+            Token::Exponent => write!(f, "operator `^`"),
+            Token::Factorial => write!(f, "operator `!`"),
         }
     }
 }
@@ -109,7 +116,7 @@ pub fn toy_tokenizer<'a>() -> Tokenizer<'a, Token> {
         keyword("!", Token::Not),
         keyword("+", Token::Plus),
         keyword("-", Token::Minus),
-        keyword("*", Token::Multiply),
+        keyword("*", Token::Times),
         keyword("{", Token::BraceOpen),
         keyword("}", Token::BraceClose),
         keyword("(", Token::ParenOpen),
@@ -117,6 +124,8 @@ pub fn toy_tokenizer<'a>() -> Tokenizer<'a, Token> {
         keyword(",", Token::Comma),
         keyword("\n", Token::LineEnd),
         keyword("{", Token::BraceOpen),
+        keyword("^", Token::Exponent),
+        keyword("!", Token::Factorial),
         identifier(Token::Identifier),
         numeric(Token::LitNum),
         delimited("\"", "\"", Token::LitString),

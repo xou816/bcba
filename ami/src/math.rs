@@ -6,69 +6,95 @@ use crate::{
 };
 
 #[derive(PartialEq, Eq)]
-pub enum OperatorKind {
+pub enum OpKind {
     Binary,
-    Unary,
-    PrecedenceGroupStart,
-    PrecedenceGroupEnd,
+    Prefix,
+    Postfix,
+    GroupStart,
+    GroupEnd,
 }
 
-pub struct OperatorToken<T> {
+pub enum Assoc {
+    Left,
+    Right,
+}
+
+pub struct OpToken<T> {
     pub token: T,
     precedence: u8,
-    pub kind: OperatorKind,
+    associativity: Option<Assoc>,
+    pub kind: OpKind,
 }
 
-impl<T> OperatorToken<T> {
-    pub fn new_binary(t: T, precedence: u8) -> Self {
-        return OperatorToken {
+impl<T> OpToken<T> {
+    pub fn new_binary(t: T, precedence: u8, associativity: Assoc) -> Self {
+        return OpToken {
             token: t,
             precedence,
-            kind: OperatorKind::Binary,
+            associativity: Some(associativity),
+            kind: OpKind::Binary,
         };
     }
 
-    pub fn new_unary(t: T, precedence: u8) -> Self {
-        return OperatorToken {
+    pub fn new_prefix(t: T, precedence: u8) -> Self {
+        return OpToken {
             token: t,
             precedence,
-            kind: OperatorKind::Unary,
+            associativity: None,
+            kind: OpKind::Prefix,
+        };
+    }
+
+    pub fn new_postfix(t: T, precedence: u8) -> Self {
+        return OpToken {
+            token: t,
+            precedence,
+            associativity: None,
+            kind: OpKind::Postfix,
         };
     }
 
     pub fn new_start_group(t: T) -> Self {
-        return OperatorToken {
+        return OpToken {
             token: t,
             precedence: 0,
-            kind: OperatorKind::PrecedenceGroupStart,
+            associativity: None,
+            kind: OpKind::GroupStart,
         };
     }
     pub fn new_end_group(t: T) -> Self {
-        return OperatorToken {
+        return OpToken {
             token: t,
             precedence: 0,
-            kind: OperatorKind::PrecedenceGroupEnd,
+            associativity: None,
+            kind: OpKind::GroupEnd,
         };
+    }
+
+    pub fn has_priority(&self, other: &Self) -> bool {
+        self.precedence > other.precedence
+            || self.precedence == other.precedence
+                && matches!(self.associativity, Some(Assoc::Right))
     }
 }
 
 pub trait MathExpression: Sized {
     type Token;
 
-    fn as_operator(token: &Self::Token, kind: OperatorKind) -> Option<OperatorToken<Self::Token>>;
+    fn as_operator(token: &Self::Token, kind: OpKind) -> Option<OpToken<Self::Token>>;
 
     fn as_operand(token: Annotated<Self::Token>) -> Result<Self, Annotated<Self::Token>>;
 
-    fn combine(lhs: Option<Self>, op: OperatorToken<Self::Token>, rhs: Self) -> Self;
+    fn combine(lhs: Option<Self>, op: OpToken<Self::Token>, rhs: Option<Self>) -> Self;
 }
 
 enum MathParserState<T, E> {
     Initial,
     LHSParsed(E),
-    OperatorParsed(Option<E>, OperatorToken<T>),
+    OperatorParsed(Option<E>, OpToken<T>),
     ParsingNested(
         Option<E>,
-        Option<OperatorToken<T>>,
+        Option<OpToken<T>>,
         Box<MathExpressionParser<T, E>>,
     ),
 }
@@ -101,7 +127,7 @@ where
                 .flat_map(|expr, t| self.maybe_complete(expr, t, next))
                 .or_else(|t| self.parse_non_operand(None, None, t)),
 
-            MathParserState::LHSParsed(lhs) => self.parse_main_operator(lhs, token),
+            MathParserState::LHSParsed(lhs) => self.parse_main_operator(lhs, token, next),
 
             MathParserState::OperatorParsed(lhs, op) => match self.parse_operand(token) {
                 ParseResult::Complete(expr, _) => self.parse_rhs(lhs, op, expr, next),
@@ -116,7 +142,9 @@ where
                         ParseResult::Accepted(token)
                     }
                     ParseResult::Complete(rhs, token) => match op {
-                        Some(op) => self.maybe_complete(E::combine(lhs, op, rhs), token, next),
+                        Some(op) => {
+                            self.maybe_complete(E::combine(lhs, op, Some(rhs)), token, next)
+                        }
                         None => self.maybe_complete(rhs, token, next),
                     },
                     ParseResult::Failed(_, token) => self.fail_token("error parsing rhs", token),
@@ -153,7 +181,7 @@ where
             .and_then(|t| {
                 self.as_operator(
                     &t.token,
-                    [OperatorKind::Binary, OperatorKind::PrecedenceGroupEnd],
+                    [OpKind::Binary, OpKind::Postfix, OpKind::GroupEnd],
                 )
             })
             .is_some()
@@ -165,11 +193,7 @@ where
         }
     }
 
-    fn as_operator<const N: usize>(
-        &self,
-        token: &T,
-        kinds: [OperatorKind; N],
-    ) -> Option<OperatorToken<T>> {
+    fn as_operator<const N: usize>(&self, token: &T, kinds: [OpKind; N]) -> Option<OpToken<T>> {
         kinds
             .into_iter()
             .fold(None, |op, kind| op.or_else(|| E::as_operator(token, kind)))
@@ -178,8 +202,8 @@ where
     fn parse_operators<const N: usize>(
         &mut self,
         token: Annotated<T>,
-        kinds: [OperatorKind; N],
-    ) -> ParseResult<T, OperatorToken<T>> {
+        kinds: [OpKind; N],
+    ) -> ParseResult<T, OpToken<T>> {
         match self.as_operator(&token.token, kinds) {
             Some(op) => ParseResult::Complete(op, None),
             None => ParseResult::Failed("expected operator".to_string(), token),
@@ -193,82 +217,83 @@ where
         }
     }
 
-    fn parse_main_operator(&mut self, lhs: E, token: Annotated<T>) -> ParseResult<T, E> {
-        self.parse_operators(
-            token,
-            [OperatorKind::Binary, OperatorKind::PrecedenceGroupEnd],
-        )
-        .flat_map(|op, t| match op.kind {
-            OperatorKind::Binary => {
-                self.state = MathParserState::OperatorParsed(Some(lhs), op);
-                ParseResult::Accepted(t)
-            }
-            OperatorKind::PrecedenceGroupEnd => self.complete(lhs, t),
-            _ => unreachable!(),
-        })
+    fn parse_main_operator(
+        &mut self,
+        lhs: E,
+        token: Annotated<T>,
+        next: Option<&Annotated<T>>,
+    ) -> ParseResult<T, E> {
+        self.parse_operators(token, [OpKind::Binary, OpKind::Postfix, OpKind::GroupEnd])
+            .flat_map(|op, t| match op.kind {
+                OpKind::Binary => {
+                    self.state = MathParserState::OperatorParsed(Some(lhs), op);
+                    ParseResult::Accepted(t)
+                }
+                OpKind::Postfix => {
+                    let final_expr = E::combine(Some(lhs), op, None);
+                    self.maybe_complete(final_expr, t, next)
+                }
+                OpKind::GroupEnd => self.complete(lhs, t),
+                _ => unreachable!(),
+            })
     }
 
     fn parse_non_operand(
         &mut self,
         current_lhs: Option<E>,
-        current_op: Option<OperatorToken<T>>,
+        current_op: Option<OpToken<T>>,
         token: Annotated<T>,
     ) -> ParseResult<T, E> {
-        self.parse_operators(
-            token,
-            [OperatorKind::Unary, OperatorKind::PrecedenceGroupStart],
-        )
-        .flat_map(|next_op, t| match next_op.kind {
-            OperatorKind::Unary => {
-                if let Some(current_op) = current_op {
+        self.parse_operators(token, [OpKind::Prefix, OpKind::GroupStart])
+            .flat_map(|next_op, t| match next_op.kind {
+                OpKind::Prefix => match current_op {
+                    Some(current_op) => {
+                        let next_parser = Box::new(Self {
+                            state: MathParserState::OperatorParsed(None, next_op),
+                            min_precedence: current_op.precedence,
+                        });
+                        self.state = MathParserState::ParsingNested(
+                            current_lhs,
+                            Some(current_op),
+                            next_parser,
+                        );
+
+                        ParseResult::Accepted(t)
+                    }
+                    None => {
+                        self.state = MathParserState::OperatorParsed(None, next_op);
+                        ParseResult::Accepted(t)
+                    }
+                },
+                OpKind::GroupStart => {
                     let next_parser = Box::new(Self {
-                        state: MathParserState::OperatorParsed(None, next_op),
-                        min_precedence: current_op.precedence,
+                        state: MathParserState::Initial,
+                        min_precedence: 0,
                     });
                     self.state =
-                        MathParserState::ParsingNested(current_lhs, Some(current_op), next_parser);
-                } else {
-                    self.state = MathParserState::OperatorParsed(None, next_op);
+                        MathParserState::ParsingNested(current_lhs, current_op, next_parser);
+                    ParseResult::Accepted(t)
                 }
-                ParseResult::Accepted(t)
-            }
-            OperatorKind::PrecedenceGroupStart => {
-                let next_parser = Box::new(Self {
-                    state: MathParserState::Initial,
-                    min_precedence: 0,
-                });
-                self.state = MathParserState::ParsingNested(current_lhs, current_op, next_parser);
-                ParseResult::Accepted(t)
-            }
-            _ => unreachable!(),
-        })
+                _ => unreachable!(),
+            })
     }
 
     fn parse_rhs(
         &mut self,
         current_lhs: Option<E>,
-        current_op: OperatorToken<T>,
+        current_op: OpToken<T>,
         rhs: E,
         next_token: Option<&Annotated<T>>,
     ) -> ParseResult<T, E> {
         let next_op = next_token.and_then(|t| {
             self.as_operator(
                 &t.token,
-                [OperatorKind::Binary, OperatorKind::PrecedenceGroupEnd],
+                [OpKind::Binary, OpKind::Postfix, OpKind::GroupEnd],
             )
         });
 
         match next_op {
-            Some(next_op)
-                if next_op.kind == OperatorKind::PrecedenceGroupEnd
-                    || next_op.precedence <= current_op.precedence
-                        && next_op.precedence > self.min_precedence =>
-            {
-                let next_lhs = E::combine(current_lhs, current_op, rhs);
-                self.state = MathParserState::LHSParsed(next_lhs);
-                ParseResult::Accepted(None)
-            }
-            Some(next_op) if next_op.precedence > current_op.precedence => {
+            Some(next_op) if next_op.has_priority(&current_op) => {
                 let next_parser = Box::new(Self {
                     state: MathParserState::LHSParsed(rhs),
                     min_precedence: current_op.precedence,
@@ -277,8 +302,17 @@ where
                     MathParserState::ParsingNested(current_lhs, Some(current_op), next_parser);
                 ParseResult::Accepted(None)
             }
+            Some(next_op)
+                if next_op.kind == OpKind::GroupEnd
+                    || next_op.precedence <= current_op.precedence
+                        && next_op.precedence > self.min_precedence =>
+            {
+                let next_lhs = E::combine(current_lhs, current_op, Some(rhs));
+                self.state = MathParserState::LHSParsed(next_lhs);
+                ParseResult::Accepted(None)
+            }
             _ => {
-                let final_expr = E::combine(current_lhs, current_op, rhs);
+                let final_expr = E::combine(current_lhs, current_op, Some(rhs));
                 self.complete(final_expr, None)
             }
         }
@@ -288,135 +322,149 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::toy::{self, Token};
+    use crate::{
+        token::Numeric64,
+        toy::{self, Token},
+    };
 
     fn make_line(t: impl IntoIterator<Item = Token>) -> impl Iterator<Item = Annotated<Token>> {
         t.into_iter().enumerate().map(|(i, t)| t.at(1, i + 1))
     }
 
+    fn int(i: i64) -> Token {
+        Token::LitNum(Numeric64::Int(i))
+    }
+
     #[test]
     fn test_math() {
-        let mut parser = MathExpressionParser::<toy::Token, ToyBinaryExp>::new();
+        let mut parser = MathExpressionParser::<toy::Token, ToyMath>::new();
 
-        // !false || true || true && false || !true
+        // -0 + 1 + 1 x 0 + -1
         let mut tokens = make_line([
-            Token::Not,
-            Token::False,
-            Token::Or,
-            Token::True,
-            Token::Or,
-            Token::True,
-            Token::And,
-            Token::False,
-            Token::Or,
-            Token::Not,
-            Token::True,
+            Token::Minus,
+            int(0),
+            Token::Plus,
+            int(1),
+            Token::Plus,
+            int(1),
+            Token::Times,
+            int(0),
+            Token::Plus,
+            Token::Minus,
+            int(1),
         ]);
 
         let res = parser.run_to_completion(&mut tokens);
-        assert_eq!(
-            "(((!(false) || true) || (true && false)) || !(true))",
-            res.unwrap().to_string()
-        );
+        assert_eq!("(((-(0) + 1) + (1 * 0)) + -(1))", res.unwrap().to_string());
     }
 
     #[test]
     fn test_math2() {
-        let mut parser = MathExpressionParser::<toy::Token, ToyBinaryExp>::new();
+        let mut parser = MathExpressionParser::<toy::Token, ToyMath>::new();
 
-        // true && (false || true) && false
+        // 1 x (0 + 1) x 0 ^ 1 x 2!
         let mut tokens = make_line([
-            Token::True,
-            Token::And,
+            int(1),
+            Token::Times,
             Token::ParenOpen,
-            Token::False,
-            Token::Or,
-            Token::True,
+            int(0),
+            Token::Plus,
+            int(1),
             Token::ParenClose,
-            Token::And,
-            Token::False,
+            Token::Times,
+            int(0),
+            Token::Exponent,
+            int(1),
+            Token::Times,
+            int(2),
+            Token::Factorial,
         ]);
 
         let res = parser.run_to_completion(&mut tokens);
-        assert_eq!(
-            "((true && (false || true)) && false)",
-            res.unwrap().to_string()
-        );
+        assert_eq!("(((1 * (0 + 1)) * (0^1)) * (2)!)", res.unwrap().to_string());
     }
 
     #[test]
     fn test_math3() {
-        let mut parser = MathExpressionParser::<toy::Token, ToyBinaryExp>::new();
+        let mut parser = MathExpressionParser::<toy::Token, ToyMath>::new();
 
-        let mut tokens = make_line([Token::True]);
+        let mut tokens = make_line([int(1)]);
 
         let res = parser.run_to_completion(&mut tokens);
-        assert_eq!("true", res.unwrap().to_string());
+        assert_eq!("1", res.unwrap().to_string());
     }
 
     #[derive(Debug)]
-    enum ToyBinaryExp {
-        Atom(bool),
-        Or(Box<ToyBinaryExp>, Box<ToyBinaryExp>),
-        And(Box<ToyBinaryExp>, Box<ToyBinaryExp>),
-        Not(Box<ToyBinaryExp>),
+    enum ToyMath {
+        Atom(i64),
+        Add(Box<ToyMath>, Box<ToyMath>),
+        Mul(Box<ToyMath>, Box<ToyMath>),
+        Exp(Box<ToyMath>, Box<ToyMath>),
+        Neg(Box<ToyMath>),
+        Fact(Box<ToyMath>),
     }
 
-    impl Display for ToyBinaryExp {
+    impl Display for ToyMath {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                ToyBinaryExp::Atom(b) => f.write_str(&b.to_string()),
-                ToyBinaryExp::Or(lhs, rhs) => f.write_fmt(format_args!("({lhs} || {rhs})")),
-                ToyBinaryExp::And(lhs, rhs) => f.write_fmt(format_args!("({lhs} && {rhs})")),
-                ToyBinaryExp::Not(rhs) => f.write_fmt(format_args!("!({rhs})")),
+                ToyMath::Atom(b) => f.write_str(&b.to_string()),
+                ToyMath::Add(lhs, rhs) => f.write_fmt(format_args!("({lhs} + {rhs})")),
+                ToyMath::Mul(lhs, rhs) => f.write_fmt(format_args!("({lhs} * {rhs})")),
+                ToyMath::Neg(rhs) => f.write_fmt(format_args!("-({rhs})")),
+                ToyMath::Exp(lhs, rhs) => f.write_fmt(format_args!("({lhs}^{rhs})")),
+                ToyMath::Fact(lhs) => f.write_fmt(format_args!("({lhs})!")),
             }
         }
     }
 
-    impl MathExpression for ToyBinaryExp {
+    impl MathExpression for ToyMath {
         type Token = toy::Token;
 
-        fn as_operator(
-            token: &Self::Token,
-            kind: OperatorKind,
-        ) -> Option<OperatorToken<Self::Token>> {
+        fn as_operator(token: &Token, kind: OpKind) -> Option<OpToken<Token>> {
             match (token, kind) {
-                (Self::Token::And, OperatorKind::Binary) => {
-                    Some(OperatorToken::new_binary(Self::Token::And, 2))
+                (Token::Times, OpKind::Binary) => {
+                    Some(OpToken::new_binary(Token::Times, 2, Assoc::Left))
                 }
-                (Self::Token::Or, OperatorKind::Binary) => {
-                    Some(OperatorToken::new_binary(Self::Token::Or, 1))
+                (Token::Plus, OpKind::Binary) => {
+                    Some(OpToken::new_binary(Token::Plus, 1, Assoc::Left))
                 }
-                (Self::Token::Not, OperatorKind::Unary) => {
-                    Some(OperatorToken::new_unary(Self::Token::Not, 1))
+                (Token::Exponent, OpKind::Binary) => {
+                    Some(OpToken::new_binary(Token::Exponent, 2, Assoc::Right))
                 }
-                (Self::Token::ParenOpen, OperatorKind::PrecedenceGroupStart) => {
-                    Some(OperatorToken::new_start_group(Self::Token::ParenOpen))
+                (Token::Minus, OpKind::Prefix) => Some(OpToken::new_prefix(Token::Minus, 1)),
+                (Token::Factorial, OpKind::Postfix) => {
+                    Some(OpToken::new_postfix(Token::Factorial, 3))
                 }
-                (Self::Token::ParenClose, OperatorKind::PrecedenceGroupEnd) => {
-                    Some(OperatorToken::new_end_group(Self::Token::ParenClose))
+                (Token::ParenOpen, OpKind::GroupStart) => {
+                    Some(OpToken::new_start_group(Token::ParenOpen))
+                }
+                (Token::ParenClose, OpKind::GroupEnd) => {
+                    Some(OpToken::new_end_group(Token::ParenClose))
                 }
                 _ => None,
             }
         }
 
-        fn as_operand(token: Annotated<Self::Token>) -> Result<Self, Annotated<Self::Token>> {
+        fn as_operand(token: Annotated<Token>) -> Result<Self, Annotated<Token>> {
             match &token.token {
-                toy::Token::True => Ok(ToyBinaryExp::Atom(true)),
-                toy::Token::False => Ok(ToyBinaryExp::Atom(false)),
+                toy::Token::LitNum(Numeric64::Int(i)) => Ok(ToyMath::Atom(*i)),
                 _ => Err(token),
             }
         }
 
-        fn combine(lhs: Option<Self>, op: OperatorToken<Self::Token>, rhs: Self) -> Self {
-            match (lhs, op.kind, op.token) {
-                (Some(lhs), OperatorKind::Binary, Self::Token::And) => {
-                    Self::And(Box::new(lhs), Box::new(rhs))
+        fn combine(lhs: Option<Self>, op: OpToken<Token>, rhs: Option<Self>) -> Self {
+            match (lhs, op.kind, op.token, rhs) {
+                (Some(lhs), OpKind::Binary, Token::Times, Some(rhs)) => {
+                    Self::Mul(Box::new(lhs), Box::new(rhs))
                 }
-                (Some(lhs), OperatorKind::Binary, Self::Token::Or) => {
-                    Self::Or(Box::new(lhs), Box::new(rhs))
+                (Some(lhs), OpKind::Binary, Token::Exponent, Some(rhs)) => {
+                    Self::Exp(Box::new(lhs), Box::new(rhs))
                 }
-                (None, OperatorKind::Unary, Self::Token::Not) => Self::Not(Box::new(rhs)),
+                (Some(lhs), OpKind::Binary, Token::Plus, Some(rhs)) => {
+                    Self::Add(Box::new(lhs), Box::new(rhs))
+                }
+                (None, OpKind::Prefix, Token::Minus, Some(rhs)) => Self::Neg(Box::new(rhs)),
+                (Some(lhs), OpKind::Postfix, Token::Factorial, None) => Self::Fact(Box::new(lhs)),
                 _ => unreachable!(),
             }
         }
