@@ -74,13 +74,6 @@ impl MathExpression for ComplexAmount {
         }
     }
 
-    fn as_operand(token: Annotated<Self::Token>) -> Result<Self, Annotated<Self::Token>> {
-        match &token.token {
-            Token::Price(f) => Ok(Self::Just(*f)),
-            _ => Err(token),
-        }
-    }
-
     fn combine(lhs: Option<Self>, op: OpToken<Self::Token>, rhs: Option<Self>) -> Self {
         match (lhs, op.token, rhs) {
             (Some(lhs), Token::Plus, Some(rhs)) => Self::Add(Box::new(lhs), Box::new(rhs)),
@@ -89,6 +82,10 @@ impl MathExpression for ComplexAmount {
             (Some(lhs), Token::Mul, Some(rhs)) => Self::Mul(Box::new(lhs), Box::new(rhs)),
             _ => unreachable!(),
         }
+    }
+
+    fn operand_parser() -> impl Parser<Token = Token, Expression = Self> {
+        just!(Token::Price(_f) => _f).map(|f| Self::Just(f))
     }
 }
 

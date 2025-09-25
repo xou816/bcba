@@ -83,7 +83,7 @@ pub trait MathExpression: Sized {
 
     fn as_operator(token: &Self::Token, kind: OpKind) -> Option<OpToken<Self::Token>>;
 
-    fn as_operand(token: Annotated<Self::Token>) -> Result<Self, Annotated<Self::Token>>;
+    fn operand_parser() -> impl Parser<Token = Self::Token, Expression = Self>;
 
     fn combine(lhs: Option<Self>, op: OpToken<Self::Token>, rhs: Option<Self>) -> Self;
 }
@@ -113,7 +113,22 @@ where
     type Expression = E;
 
     fn peek(&self, token: &Annotated<Self::Token>) -> PeekResult {
-        PeekResult::WouldAccept
+        match self.as_operator(
+            &token.token,
+            [
+                OpKind::Binary,
+                OpKind::Postfix,
+                OpKind::Prefix,
+                OpKind::GroupStart,
+                OpKind::GroupEnd,
+            ],
+        ) {
+            Some(_) => PeekResult::WouldAccept,
+            None => match E::operand_parser().peek(token) {
+                PeekResult::WouldComplete => PeekResult::WouldAccept,
+                r => r,
+            },
+        }
     }
 
     fn parse(
@@ -171,6 +186,13 @@ where
         }
     }
 
+    fn new_boxed(state: MathParserState<T, E>, min_precedence: u8) -> Box<Self> {
+        Box::new(Self {
+            state,
+            min_precedence,
+        })
+    }
+
     fn maybe_complete(
         &mut self,
         expr: E,
@@ -211,10 +233,7 @@ where
     }
 
     fn parse_operand(&mut self, token: Annotated<T>) -> ParseResult<T, E> {
-        match E::as_operand(token) {
-            Ok(expr) => ParseResult::Complete(expr, None),
-            Err(token) => ParseResult::Failed("expected operand".to_string(), token),
-        }
+        E::operand_parser().parse(token, None)
     }
 
     fn parse_main_operator(
@@ -248,16 +267,15 @@ where
             .flat_map(|next_op, t| match next_op.kind {
                 OpKind::Prefix => match current_op {
                     Some(current_op) => {
-                        let next_parser = Box::new(Self {
-                            state: MathParserState::OperatorParsed(None, next_op),
-                            min_precedence: current_op.precedence,
-                        });
+                        let next_parser = Self::new_boxed(
+                            MathParserState::OperatorParsed(None, next_op),
+                            current_op.precedence,
+                        );
                         self.state = MathParserState::ParsingNested(
                             current_lhs,
                             Some(current_op),
                             next_parser,
                         );
-
                         ParseResult::Accepted(t)
                     }
                     None => {
@@ -266,10 +284,7 @@ where
                     }
                 },
                 OpKind::GroupStart => {
-                    let next_parser = Box::new(Self {
-                        state: MathParserState::Initial,
-                        min_precedence: 0,
-                    });
+                    let next_parser = Self::new_boxed(MathParserState::Initial, 0);
                     self.state =
                         MathParserState::ParsingNested(current_lhs, current_op, next_parser);
                     ParseResult::Accepted(t)
@@ -294,10 +309,8 @@ where
 
         match next_op {
             Some(next_op) if next_op.has_priority(&current_op) => {
-                let next_parser = Box::new(Self {
-                    state: MathParserState::LHSParsed(rhs),
-                    min_precedence: current_op.precedence,
-                });
+                let next_parser =
+                    Self::new_boxed(MathParserState::LHSParsed(rhs), current_op.precedence);
                 self.state =
                     MathParserState::ParsingNested(current_lhs, Some(current_op), next_parser);
                 ParseResult::Accepted(None)
@@ -323,6 +336,7 @@ where
 mod tests {
     use super::*;
     use crate::{
+        just,
         token::Numeric64,
         toy::{self, Token},
     };
@@ -362,26 +376,27 @@ mod tests {
     fn test_math2() {
         let mut parser = MathExpressionParser::<toy::Token, ToyMath>::new();
 
-        // 1 x (0 + 1) x 0 ^ 1 x 2!
-        let mut tokens = make_line([
-            int(1),
-            Token::Times,
-            Token::ParenOpen,
-            int(0),
-            Token::Plus,
-            int(1),
-            Token::ParenClose,
-            Token::Times,
-            int(0),
-            Token::Exponent,
-            int(1),
-            Token::Times,
-            int(2),
-            Token::Factorial,
-        ]);
+        // 1 x (2 + 3) x 4 ^ 5 x 6!
+        let mut tokens = toy::toy_tokenizer().tokenize("1 * (2 + 3) * 4^5 * 6!");
+        // make_line([
+        //     int(1),
+        //     Token::Times,
+        //     Token::ParenOpen,
+        //     int(2),
+        //     Token::Plus,
+        //     int(3),
+        //     Token::ParenClose,
+        //     Token::Times,
+        //     int(4),
+        //     Token::Exponent,
+        //     int(5),
+        //     Token::Times,
+        //     int(6),
+        //     Token::Not,
+        // ]);
 
         let res = parser.run_to_completion(&mut tokens);
-        assert_eq!("(((1 * (0 + 1)) * (0^1)) * (2)!)", res.unwrap().to_string());
+        assert_eq!("(((1 * (2 + 3)) * (4^5)) * (6)!)", res.unwrap().to_string());
     }
 
     #[test]
@@ -432,9 +447,7 @@ mod tests {
                     Some(OpToken::new_binary(Token::Exponent, 2, Assoc::Right))
                 }
                 (Token::Minus, OpKind::Prefix) => Some(OpToken::new_prefix(Token::Minus, 1)),
-                (Token::Factorial, OpKind::Postfix) => {
-                    Some(OpToken::new_postfix(Token::Factorial, 3))
-                }
+                (Token::Not, OpKind::Postfix) => Some(OpToken::new_postfix(Token::Not, 3)),
                 (Token::ParenOpen, OpKind::GroupStart) => {
                     Some(OpToken::new_start_group(Token::ParenOpen))
                 }
@@ -442,13 +455,6 @@ mod tests {
                     Some(OpToken::new_end_group(Token::ParenClose))
                 }
                 _ => None,
-            }
-        }
-
-        fn as_operand(token: Annotated<Token>) -> Result<Self, Annotated<Token>> {
-            match &token.token {
-                toy::Token::LitNum(Numeric64::Int(i)) => Ok(ToyMath::Atom(*i)),
-                _ => Err(token),
             }
         }
 
@@ -464,9 +470,13 @@ mod tests {
                     Self::Add(Box::new(lhs), Box::new(rhs))
                 }
                 (None, OpKind::Prefix, Token::Minus, Some(rhs)) => Self::Neg(Box::new(rhs)),
-                (Some(lhs), OpKind::Postfix, Token::Factorial, None) => Self::Fact(Box::new(lhs)),
+                (Some(lhs), OpKind::Postfix, Token::Not, None) => Self::Fact(Box::new(lhs)),
                 _ => unreachable!(),
             }
+        }
+
+        fn operand_parser() -> impl Parser<Token = Token, Expression = Self> {
+            just!(Token::LitNum(Numeric64::Int(_i)) => _i).map(Self::Atom)
         }
     }
 }

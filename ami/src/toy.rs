@@ -1,4 +1,4 @@
-use std::fmt::{write, Display};
+use std::fmt::Display;
 
 use crate::{
     token::{Annotated, Numeric64, Tokenizable, Tokenizer},
@@ -22,7 +22,6 @@ pub enum Token {
     Plus,
     Minus,
     Times,
-    Factorial,
     Assign,
     Let,
     Identifier(String),
@@ -66,7 +65,6 @@ impl Token {
             Token::Minus => "-".to_owned(),
             Token::Times => "*".to_owned(),
             Token::Exponent => "^".to_owned(),
-            Token::Factorial => "!".to_owned(),
         }
     }
 }
@@ -96,7 +94,6 @@ impl Display for Token {
             Token::Minus => write!(f, "operator `-`"),
             Token::Times => write!(f, "operator `*`"),
             Token::Exponent => write!(f, "operator `^`"),
-            Token::Factorial => write!(f, "operator `!`"),
         }
     }
 }
@@ -125,7 +122,6 @@ pub fn toy_tokenizer<'a>() -> Tokenizer<'a, Token> {
         keyword("\n", Token::LineEnd),
         keyword("{", Token::BraceOpen),
         keyword("^", Token::Exponent),
-        keyword("!", Token::Factorial),
         identifier(Token::Identifier),
         numeric(Token::LitNum),
         delimited("\"", "\"", Token::LitString),
